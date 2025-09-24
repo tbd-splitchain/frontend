@@ -37,6 +37,7 @@ export const ProfilePicture: React.FC<ProfilePictureProps> = ({
         width={64}
         height={64}
         className="w-full h-full object-cover"
+        unoptimized
         onError={(e) => {
           // Fallback to a different seed if the first one fails
           const target = e.target as HTMLImageElement;
