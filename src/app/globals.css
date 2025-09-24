@@ -3,24 +3,182 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --primary: #7C3AED;
+  --primary-dark: #6D28D9;
+  --secondary: #F9FAFB;
+  --accent-blue: #DBEAFE;
+  --accent-purple: #F3E8FF;
+  --accent-green: #ECFDF5;
+  --text-gray: #6B7280;
+  --text-dark: #111827;
+  --border: #E5E7EB;
+  --folder-blue: #BFDBFE;
+  --folder-light: #EFF6FF;
+  --document-pink: #FDF2F8;
+  --checkmark-blue: #3B82F6;
+  --arrow-pink: #F472B6;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-dark: var(--primary-dark);
+  --color-secondary: var(--secondary);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-purple: var(--accent-purple);
+  --color-accent-green: var(--accent-green);
+  --color-text-gray: var(--text-gray);
+  --color-text-dark: var(--text-dark);
+  --color-border: var(--border);
+  --color-folder-blue: var(--folder-blue);
+  --color-folder-light: var(--folder-light);
+  --color-document-pink: var(--document-pink);
+  --color-checkmark-blue: var(--checkmark-blue);
+  --color-arrow-pink: var(--arrow-pink);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
 }
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-gray);
+}
+
+/* Smooth transitions */
+* {
+  transition: all 0.2s ease-in-out;
+}
+
+/* Gradient backgrounds */
+.gradient-blue {
+  background: linear-gradient(135deg, #E0F2FE 0%, #BAE6FD 100%);
+}
+
+.gradient-purple {
+  background: linear-gradient(135deg, #F3E8FF 0%, #E9D5FF 100%);
+}
+
+.gradient-green {
+  background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
+}
+
+  /* Glass morphism effect */
+  .glass {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  /* SVG Animation Styles for illustrator.svg */
+  .svg-animated {
+    animation: svgFadeIn 1s ease-in-out;
+  }
+
+  @keyframes svgFadeIn {
+    0% { 
+      opacity: 0; 
+      transform: scale(0.8); 
+    }
+    100% { 
+      opacity: 1; 
+      transform: scale(1); 
+    }
+  }
+
+  /* Storyset SVG Animations */
+  svg#freepik_stories-folder:not(.animated) .animable {
+    opacity: 0;
+  }
+  
+  svg#freepik_stories-folder.animated #freepik--folder--inject-77 {
+    animation: 1.5s Infinite linear wind;
+    animation-delay: 0s;
+  }
+  
+  svg#freepik_stories-folder.animated #freepik--Plant--inject-77 {
+    animation: 1.5s Infinite linear floating;
+    animation-delay: 0s;
+  }
+  
+  svg#freepik_stories-folder.animated #freepik--Character--inject-77 {
+    animation: 1s 1 forwards linear slideRight;
+    animation-delay: 0s;
+  }
+  
+  svg#freepik_stories-folder.animated #freepik--Cursor--inject-77 {
+    animation: 1s 1 forwards cubic-bezier(.36,-0.01,.5,1.38) slideDown;
+    animation-delay: 0s;
+  }
+
+  @keyframes wind {
+    0% { transform: rotate( 0deg ); }
+    25% { transform: rotate( 1deg ); }
+    75% { transform: rotate( -1deg ); }
+  }
+
+  @keyframes floating {
+    0% { 
+      opacity: 1; 
+      transform: translateY(0px); 
+    }
+    50% { 
+      transform: translateY(-10px); 
+    }
+    100% { 
+      opacity: 1; 
+      transform: translateY(0px); 
+    }
+  }
+
+  @keyframes slideRight {
+    0% { 
+      opacity: 0; 
+      transform: translateX(30px); 
+    }
+    100% { 
+      opacity: 1; 
+      transform: translateX(0); 
+    }
+  }
+
+  @keyframes slideDown {
+    0% { 
+      opacity: 0; 
+      transform: translateY(-30px); 
+    }
+    100% { 
+      opacity: 1; 
+      transform: translateY(0); 
+    }
+  }
+
+  .animator-hidden { 
+    display: none; 
+  }
