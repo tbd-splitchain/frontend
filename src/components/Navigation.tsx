@@ -60,6 +60,9 @@ interface ExpenseData {
     name: string;
     price: number;
   }>;
+  // Contract data fields
+  groupId?: string;
+  billIndex?: number;
 }
 
 interface GroupMember {
@@ -190,7 +193,14 @@ export const Navigation: React.FC = () => {
     case 'group-details':
       return <GroupDetailsScreen onBack={handleBack} onExpenseDetails={handleExpenseDetails} groupData={selectedGroup || undefined} />;
     case 'expense-details':
-      return <ExpenseDetailsScreen onBack={handleBack} expenseData={selectedExpense || undefined} />;
+      return (
+        <ExpenseDetailsScreen
+          onBack={handleBack}
+          expenseData={selectedExpense || undefined}
+          groupId={selectedExpense?.groupId ? BigInt(selectedExpense.groupId) : undefined}
+          billIndex={selectedExpense?.billIndex}
+        />
+      );
     default:
       return <OnboardingScreen onNext={handleNext} />;
   }

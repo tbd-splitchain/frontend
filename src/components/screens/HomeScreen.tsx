@@ -1,9 +1,20 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ProfilePicture } from '../ui/ProfilePicture';
 import { MoreVertical, ArrowRight, Plus, Camera, User } from 'lucide-react';
+import { useAccount, useBalance, useChainId } from 'wagmi';
+import { formatEther } from 'viem';
+import { useExpenseSplitter, useUserExpenseDashboard } from '@/hooks/useExpenseSplitter';
+import { getContractAddress, isChainSupported, getSupportedChainNames, getContractAddresses } from '@/contracts/config';
+
+// Extend window object for ethereum
+declare global {
+  interface Window {
+    ethereum?: any;
+  }
+}
 
 interface Participant {
   name: string;
@@ -120,15 +131,127 @@ interface HomeScreenProps {
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFriends, onTransactions, onReceiptScan, onGroupDetails, onExpenseDetails }) => {
+  const [mounted, setMounted] = useState(false);
+
+  // Wallet hooks with error handling
+  let address, isConnected, balance, chainId;
+  try {
+    const account = useAccount();
+    const currentChainId = useChainId();
+
+    // Force refetch balance when address or chainId changes
+    const balanceResult = useBalance({
+      address: account.address,
+      chainId: account.chainId || currentChainId,
+      query: {
+        enabled: !!account.address && !!account.isConnected,
+        refetchOnWindowFocus: false,
+        refetchInterval: 10000, // Refetch every 10 seconds
+      }
+    });
+
+    console.log('Balance query result:', {
+      data: balanceResult.data,
+      error: balanceResult.error,
+      isLoading: balanceResult.isLoading,
+      isFetching: balanceResult.isFetching,
+      status: balanceResult.status
+    });
+
+    address = account.address;
+    isConnected = account.isConnected;
+    balance = balanceResult.data;
+    chainId = account.chainId || currentChainId;
+  } catch (error) {
+    console.error('Wallet hook error:', error);
+    address = undefined;
+    isConnected = false;
+    balance = undefined;
+    chainId = undefined;
+  }
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Helper function to truncate address
+  const truncateAddress = (addr: string | undefined) => {
+    if (!addr) return 'Not Connected';
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  };
+
+  // Helper function to get network name
+  const getNetworkName = (chainId: number | undefined) => {
+    switch (chainId) {
+      case 1: return 'Ethereum';
+      case 42161: return 'Arbitrum';
+      case 421614: return 'Arbitrum Sepolia';
+      case 11155111: return 'Sepolia';
+      default: return 'Unknown Network';
+    }
+  };
+
+  // Helper function to format balance
+  const formatBalance = (balance: any, chainId: number | undefined) => {
+    if (!balance || !mounted) return '0.00';
+    const ethBalance = parseFloat(formatEther(balance.value));
+
+    // For testnets, don't show USD conversion, just show the ETH amount
+    if (chainId === 421614 || chainId === 11155111) {
+      return `${ethBalance.toFixed(4)} ETH`;
+    }
+
+    // For mainnet, show USD equivalent
+    const usdBalance = ethBalance * 2000;
+    return `$${usdBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const displayName = mounted && address ? truncateAddress(address) : 'Connecting...';
+  const displayBalance = formatBalance(balance, chainId);
+  const networkName = getNetworkName(chainId);
+
+  // Contract integration
+  const contracts = getContractAddresses();
+  const contractAddress = contracts.EXPENSE_SPLITTER;
+  const chainSupported = isChainSupported(chainId);
+  const contractError = !chainSupported && chainId ?
+    `Unsupported chain ID: ${chainId}. Supported chains: ${getSupportedChainNames()}` :
+    null;
+
+  const expenseSplitter = useExpenseSplitter();
+  const userDashboard = useUserExpenseDashboard(address as `0x${string}`, BigInt(1)); // Example group ID
+
+  // Handle transaction success (following Agro's pattern)
+  useEffect(() => {
+    if (expenseSplitter.isSuccess && expenseSplitter.hash) {
+      console.log('Transaction confirmed successfully! Hash:', expenseSplitter.hash);
+      // The toast notification is already handled in the hook
+    }
+  }, [expenseSplitter.isSuccess, expenseSplitter.hash]);
+
+  // Debug logging
+  useEffect(() => {
+    if (mounted) {
+      console.log('Debug wallet info:', {
+        address,
+        chainId,
+        networkName,
+        balance: balance?.value,
+        isConnected,
+        contractAddress
+      });
+    }
+  }, [mounted, address, chainId, balance, isConnected, contractAddress]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50/20">
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
-            <ProfilePicture name="ogazboiz" size="lg" />
+            <ProfilePicture name={displayName} size="lg" />
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">ogazboiz</h1>
+              <h1 className="text-2xl font-bold text-gray-900">{displayName}</h1>
               <p className="text-gray-600">SplitChain Dashboard</p>
             </div>
           </div>
@@ -161,8 +284,21 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
                   <div className="bg-gradient-to-br from-gray-800 via-gray-900 to-black rounded-2xl p-6 relative z-0">
                     <div className="flex items-center justify-between mb-4">
                       <div>
-                        <p className="text-gray-400 text-sm mb-2">My Balance</p>
-                        <p className="text-3xl font-bold text-white">$14,905.80</p>
+                        <p className="text-gray-400 text-sm mb-2">
+                          My Balance {mounted && chainId && (
+                            <span className="text-blue-400">• {networkName}</span>
+                          )}
+                        </p>
+                        <p className="text-3xl font-bold text-white">
+                          {mounted ? displayBalance : (
+                            <span className="animate-pulse">Loading...</span>
+                          )}
+                        </p>
+                        {mounted && balance && chainId && (chainId === 1 || chainId === 42161) && (
+                          <p className="text-gray-500 text-xs mt-1">
+                            {parseFloat(formatEther(balance.value)).toFixed(4)} ETH
+                          </p>
+                        )}
                       </div>
                       <ArrowRight className="w-6 h-6 text-gray-400" />
                     </div>
@@ -235,6 +371,158 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
               </div>
             </motion.div>
 
+            {/* Smart Contract Status */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.25 }}
+            >
+              <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                <h3 className="text-base font-semibold text-gray-900 mb-3">Smart Contract</h3>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Status</span>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${contractAddress ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                      <span className={`text-sm font-medium ${contractAddress ? 'text-green-600' : 'text-red-600'}`}>
+                        {contractAddress ? 'Available' : 'Not Available'}
+                      </span>
+                    </div>
+                  </div>
+                  {contractAddress && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Address</span>
+                      <span className="text-xs font-mono text-gray-900">
+                        {contractAddress.slice(0, 6)}...{contractAddress.slice(-4)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Network</span>
+                    <span className="text-sm font-medium text-blue-600">{networkName}</span>
+                  </div>
+                  {(!contractAddress || contractError) && chainId && (
+                    <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <p className="text-yellow-800 text-sm font-medium mb-2">
+                        {contractError || `Contract not available on ${networkName}`}
+                      </p>
+                      <p className="text-yellow-700 text-xs mb-2">
+                        Please switch to Arbitrum Sepolia to use the contract
+                      </p>
+                      <button
+                        onClick={async () => {
+                          if (window.ethereum) {
+                            try {
+                              await window.ethereum.request({
+                                method: 'wallet_switchEthereumChain',
+                                params: [{ chainId: '0x17EAE' }], // 421614 in hex for Arbitrum Sepolia
+                              });
+                            } catch (error: any) {
+                              // If the chain doesn't exist, add it
+                              if (error.code === 4902) {
+                                try {
+                                  await window.ethereum.request({
+                                    method: 'wallet_addEthereumChain',
+                                    params: [{
+                                      chainId: '0x17EAE',
+                                      chainName: 'Arbitrum Sepolia',
+                                      nativeCurrency: {
+                                        name: 'ETH',
+                                        symbol: 'ETH',
+                                        decimals: 18
+                                      },
+                                      rpcUrls: ['https://arb-sepolia.g.alchemy.com/v2/woz-6XsoF8SYpREpEiPG1'],
+                                      blockExplorerUrls: ['https://sepolia.arbiscan.io/']
+                                    }]
+                                  });
+                                } catch (addError) {
+                                  console.error('Error adding network:', addError);
+                                }
+                              }
+                            }
+                          }
+                        }}
+                        className="w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        Switch to Arbitrum Sepolia
+                      </button>
+                    </div>
+                  )}
+                  {contractAddress && chainSupported && (
+                    <div className="space-y-2 mt-2">
+                      {/* Contract Status Info */}
+                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                        <p className="text-green-800 text-sm font-medium mb-2">
+                          ✅ Contract Activated
+                        </p>
+                        <p className="text-green-700 text-xs">
+                          Contract is now ready for testing. Check console for detailed error logs if issues occur.
+                        </p>
+                      </div>
+
+                      {/* Test Read Function First */}
+                      <button
+                        onClick={async () => {
+                          try {
+                            console.log('Testing read function first...');
+                            const groupInfo = await fetch(`https://arb-sepolia.g.alchemy.com/v2/woz-6XsoF8SYpREpEiPG1`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                jsonrpc: '2.0',
+                                method: 'eth_call',
+                                params: [{
+                                  to: contractAddress,
+                                  data: '0x8da5cb5b' // Simple read call
+                                }, 'latest'],
+                                id: 1
+                              })
+                            });
+                            const result = await groupInfo.json();
+                            console.log('Contract read test result:', result);
+                          } catch (error) {
+                            console.error('Read test error:', error);
+                          }
+                        }}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-medium transition-colors mb-2"
+                      >
+                        🔍 Test Read Function
+                      </button>
+
+                      {/* Test Contract Button */}
+                      <button
+                        onClick={async () => {
+                          try {
+                            // Create a simple test group with minimum 2 members
+                            const testAddress2 = '0x1234567890123456789012345678901234567890'; // Dummy second address
+
+                            // Use WETH token for test group
+                            const contracts = getContractAddresses();
+                            const tokenAddress = contracts.TOKENS?.WETH || '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73';
+
+                            console.log('Creating test group with WETH token:', tokenAddress);
+
+                            await expenseSplitter.createGroup(
+                              'Test Group (WETH)',
+                              tokenAddress, // Use WETH token address
+                              ['You', 'TestUser'],
+                              [address as `0x${string}`, testAddress2 as `0x${string}`]
+                            );
+                          } catch (error) {
+                            console.error('Error creating group:', error);
+                          }
+                        }}
+                        disabled={expenseSplitter.isPending || !address || !chainSupported}
+                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white py-2 rounded-lg text-sm font-medium transition-colors"
+                      >
+                        {expenseSplitter.isPending ? 'Creating...' : '🧪 Test Create Group'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+
             {/* Recent Activity */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -243,275 +531,134 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
             >
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
                 <h3 className="text-base font-semibold text-gray-900 mb-3">Recent Activity</h3>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3 p-2">
-                    <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">Payment received</p>
-                      <p className="text-xs text-gray-500">From Jimmy Cooper</p>
-                    </div>
-                    <span className="text-sm font-semibold text-green-600">+$45.20</span>
-                  </div>
-
-                  <div className="flex items-center gap-3 p-2">
-                    <div className="w-2 h-2 bg-purple-500 rounded-full flex-shrink-0"></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">Expense created</p>
-                      <p className="text-xs text-gray-500">Coffee & Lunch</p>
-                    </div>
-                    <span className="text-sm font-semibold text-purple-600">$150.50</span>
-                  </div>
-
-                  <div className="flex items-center gap-3 p-2">
-                    <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0"></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">Group joined</p>
-                      <p className="text-xs text-gray-500">SF Roommates</p>
+                {expenseSplitter.hash && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 p-2">
+                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                        expenseSplitter.isSuccess ? 'bg-green-500' :
+                        expenseSplitter.isConfirming ? 'bg-yellow-500' :
+                        'bg-blue-500'
+                      }`}></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900">
+                          {expenseSplitter.isSuccess ? 'Group Created' :
+                           expenseSplitter.isConfirming ? 'Creating Group...' :
+                           'Group Transaction Sent'}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          Tx: {expenseSplitter.hash.slice(0, 10)}...{expenseSplitter.hash.slice(-8)}
+                        </p>
+                      </div>
+                      <span className="text-xs text-blue-600">
+                        {expenseSplitter.isSuccess ? '✓' : '⏳'}
+                      </span>
                     </div>
                   </div>
-                </div>
+                )}
+                {!expenseSplitter.hash && (
+                  <div className="text-center py-6">
+                    <div className="w-12 h-12 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-3">
+                      <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                      </svg>
+                    </div>
+                    <p className="text-sm text-gray-500">No recent activity</p>
+                    <p className="text-xs text-gray-400 mt-1">Create your first group to get started</p>
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>
 
           {/* Main Content Area */}
           <div className="lg:col-span-3 space-y-8">
-            {/* Pending Settlements */}
+            {/* My Groups & Balances */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.1 }}
             >
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">Pending Settlements</h2>
-                <Button variant="ghost" className="text-[#7C3AED] hover:text-[#6D28D9]" onClick={onTransactions}>
-                  View All Transactions
-                </Button>
-              </div>
-              
-              <div className="grid gap-6">
-                {/* Pending Bill - All Approved - Ready to Execute - You paid, others owe you */}
-                <div
-                  className="bg-gradient-to-br from-green-100 to-green-200 rounded-3xl p-6 hover:shadow-xl transition-all duration-300 cursor-pointer"
-                  onClick={() => onExpenseDetails && onExpenseDetails({
-                    id: 'bill-150',
-                    description: 'Coffee & Lunch',
-                    amount: 150.50,
-                    date: '2024-09-23',
-                    timestamp: '2 hours ago',
-                    merchant: 'Downtown Café',
-                    location: 'San Francisco, CA',
-                    paidBy: 'You (ogazboiz)',
-                    participants: [
-                      { name: 'You (ogazboiz)', amount: 50.17, status: 'paid' },
-                      { name: 'Jimmy Cooper', amount: 50.17, status: 'approved' },
-                      { name: 'Guy Hawkins', amount: 50.17, status: 'approved' },
-                      { name: 'Robert Fox', amount: 50.16, status: 'approved' }
-                    ],
-                    status: 'pending',
-                    approvals: 4,
-                    totalParticipants: 4,
-                    isReady: true,
-                    txHash: null,
-                    userAction: 'collect',
-                    youWillReceive: 150.50,
-                    youOwe: 0,
-                    category: 'Food & Dining',
-                    splitMethod: 'equal',
-                    receipt: 'Available',
-                    notes: 'You paid for lunch at downtown cafe. Others will reimburse you.',
-                    items: [
-                      { name: 'Coffee (4x)', price: 20.00 },
-                      { name: 'Sandwiches (4x)', price: 80.00 },
-                      { name: 'Pastries (4x)', price: 32.00 },
-                      { name: 'Tax & Tip', price: 18.50 }
-                    ]
-                  })}
-                >
-                  <div className="mb-4">
-                    <p className="text-green-600 text-sm font-medium mb-1">💰 You Will Receive</p>
-                    <h3 className="font-bold text-gray-900 text-2xl mb-1">$150.50</h3>
-                    <p className="text-green-700 text-sm mb-3">You paid • Others will reimburse you</p>
-                    <div className="flex -space-x-2 mb-3">
-                      <ProfilePicture name="ogazboiz" size="sm" />
-                      <ProfilePicture name="Jimmy Cooper" size="sm" />
-                      <ProfilePicture name="Guy Hawkins" size="sm" />
-                      <ProfilePicture name="Robert Fox" size="sm" />
-                    </div>
-                    <p className="text-sm text-green-600 font-medium mb-3">✅ All 4 participants (3 approved, you paid)</p>
-                  </div>
-
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-2xl font-semibold shadow-lg"
-                    onClick={() => { alert('Executing payment to collect your money...'); }}
-                  >
-                    Collect Payment
-                  </Button>
-                </div>
-
-                {/* Pending Bill - You need to pay your share */}
-                <div
-                  className="bg-gradient-to-br from-orange-100 to-red-200 rounded-3xl p-6 hover:shadow-xl transition-all duration-300 cursor-pointer"
-                  onClick={() => onExpenseDetails && onExpenseDetails({
-                    id: 'bill-89',
-                    description: 'Team Dinner',
-                    amount: 89.30,
-                    date: '2024-09-22',
-                    timestamp: '1 day ago',
-                    merchant: 'Upscale Restaurant',
-                    location: 'San Francisco, CA',
-                    paidBy: 'Alice Smith',
-                    participants: [
-                      { name: 'Alice Smith', amount: 29.77, status: 'paid' },
-                      { name: 'Bob Johnson', amount: 29.77, status: 'approved' },
-                      { name: 'You (ogazboiz)', amount: 29.76, status: 'pending' }
-                    ],
-                    status: 'pending',
-                    approvals: 2,
-                    totalParticipants: 3,
-                    isReady: false,
-                    txHash: null,
-                    userAction: 'pay',
-                    youWillReceive: 0,
-                    youOwe: 29.76,
-                    category: 'Food & Dining',
-                    splitMethod: 'equal',
-                    receipt: 'Available',
-                    notes: 'Alice paid for team dinner. You need to pay your share.',
-                    items: [
-                      { name: 'Main Courses (3x)', price: 54.00 },
-                      { name: 'Appetizers', price: 18.00 },
-                      { name: 'Drinks', price: 12.00 },
-                      { name: 'Tax & Tip', price: 5.30 }
-                    ]
-                  })}
-                >
-                  <div className="mb-4">
-                    <p className="text-red-600 text-sm font-medium mb-1">💳 You Owe</p>
-                    <h3 className="font-bold text-gray-900 text-2xl mb-1">$29.76</h3>
-                    <p className="text-red-700 text-sm mb-3">Alice paid • You need to reimburse your share</p>
-                    <div className="flex -space-x-2 mb-3">
-                      <ProfilePicture name="Alice Smith" size="sm" />
-                      <ProfilePicture name="Bob Johnson" size="sm" />
-                      <ProfilePicture name="ogazboiz" size="sm" />
-                    </div>
-                    <p className="text-sm text-orange-600 font-medium mb-3">⏳ Your approval needed</p>
-                  </div>
-
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-2xl font-semibold shadow-lg"
-                    onClick={() => { alert('Approving and paying your share of $29.76...'); }}
-                  >
-                    Pay Your Share
-                  </Button>
-                </div>
-              </div>
-            </motion.div>
-
-            {/* Active Groups */}
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.6, delay: 0.2 }}
-            >
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">Active Groups</h2>
+                <h2 className="text-2xl font-bold text-gray-900">My Groups & Balances</h2>
                 <Button variant="ghost" className="text-[#7C3AED] hover:text-[#6D28D9]" onClick={onFriends}>
                   Manage Groups
                 </Button>
               </div>
-              
-              <div className="grid md:grid-cols-2 gap-6">
-                <Card className="p-6 hover:shadow-lg transition-shadow">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
-                      <span className="text-xl font-bold text-blue-600">SF</span>
+
+              <div className="grid gap-6">
+                {/* Example: Group 1 Balance */}
+                {userDashboard.memberBalance && !userDashboard.isLoading && (address && isConnected) ? (
+                  <div className="bg-gradient-to-br from-blue-100 to-purple-200 rounded-3xl p-6 hover:shadow-xl transition-all duration-300">
+                    <div className="mb-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-gray-900 text-xl">Group #1</h3>
+                        <span className="text-sm text-blue-600 bg-blue-100 px-2 py-1 rounded-full">Active</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <p className="text-green-600 text-sm font-medium mb-1">💰 You Are Owed</p>
+                          <p className="font-bold text-gray-900 text-lg">{userDashboard.memberBalance.totalOwedByOthersFormatted} ETH</p>
+                        </div>
+                        <div>
+                          <p className="text-red-600 text-sm font-medium mb-1">💳 You Owe</p>
+                          <p className="font-bold text-gray-900 text-lg">{userDashboard.memberBalance.totalOwedFormatted} ETH</p>
+                        </div>
+                      </div>
+
+                      <div className="bg-white bg-opacity-50 rounded-lg p-3 mb-4">
+                        <p className="text-sm text-gray-600 mb-1">Net Balance</p>
+                        <p className={`font-bold text-lg ${
+                          parseFloat(userDashboard.memberBalance.netBalanceFormatted) > 0 ? 'text-green-600' :
+                          parseFloat(userDashboard.memberBalance.netBalanceFormatted) < 0 ? 'text-red-600' : 'text-gray-600'
+                        }`}>
+                          {parseFloat(userDashboard.memberBalance.netBalanceFormatted) > 0 ? '+' : ''}
+                          {userDashboard.memberBalance.netBalanceFormatted} ETH
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-gray-900">SF Roommates</h3>
-                      <p className="text-sm text-gray-500">4 members • $3,330.30 total</p>
-                    </div>
-                  </div>
-                  <div className="flex -space-x-2 mb-4">
-                    <ProfilePicture name="ogazboiz" size="sm" />
-                    <ProfilePicture name="Jimmy Cooper" size="sm" />
-                    <ProfilePicture name="Guy Hawkins" size="sm" />
-                    <ProfilePicture name="Robert Fox" size="sm" />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Last expense: 2 hours ago</span>
-                    <Button variant="secondary" size="sm" onClick={() => onGroupDetails && onGroupDetails({
-                      id: 'sf-roommates',
-                      name: 'SF Roommates',
-                      description: 'Shared expenses for San Francisco apartment',
-                      totalExpenses: 1250.40,
-                      pendingAmount: 200.00,
-                      monthlyTotal: 1250.40,
-                      members: [
-                        { id: '1', name: 'ogazboiz', username: '0x1234567890abcdef...1234', role: 'admin', balance: 45.20, status: 'active' },
-                        { id: '2', name: 'Jimmy Cooper', username: '0xabcd1234567890ef...5678', role: 'member', balance: -23.50, status: 'active' },
-                        { id: '3', name: 'Guy Hawkins', username: '0xef9876543210abcd...9abc', role: 'member', balance: 0, status: 'active' },
-                        { id: '4', name: 'Robert Fox', username: '0x567890abcdef1234...def0', role: 'member', balance: -21.70, status: 'active' }
-                      ],
-                      recentExpenses: [],
-                      groupSettings: {
-                        autoApproveLimit: 50.00,
-                        requireAllApprovals: true,
-                        allowMemberInvites: true
-                      }
-                    })}>
-                      View Details
-                    </Button>
-                  </div>
-                </Card>
-                
-                <Card className="p-6 hover:shadow-lg transition-shadow">
-                  <div className="flex items-center gap-4 mb-4">
-                    <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
-                      <span className="text-xl font-bold text-green-600">W</span>
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-gray-900">Work Lunch Crew</h3>
-                      <p className="text-sm text-gray-500">3 members • $89.30 total</p>
+
+                    <div className="flex gap-2">
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium"
+                        onClick={() => onGroupDetails && onGroupDetails()}
+                      >
+                        View Details
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 py-2 rounded-lg font-medium"
+                        onClick={onCreateExpense}
+                      >
+                        Add Expense
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex -space-x-2 mb-4">
-                    <ProfilePicture name="Alice Smith" size="sm" />
-                    <ProfilePicture name="Bob Johnson" size="sm" />
-                    <ProfilePicture name="ogazboiz" size="sm" />
+                ) : (
+                  <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl p-6">
+                    <div className="text-center">
+                      <div className="w-16 h-16 mx-auto bg-gray-300 rounded-full flex items-center justify-center mb-4">
+                        <User className="w-8 h-8 text-gray-500" />
+                      </div>
+                      <h3 className="font-bold text-gray-900 text-xl mb-2">No Groups Yet</h3>
+                      <p className="text-gray-600 mb-4">Create or join a group to start splitting expenses</p>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-6 rounded-lg font-medium"
+                        onClick={onFriends}
+                      >
+                        Create Group
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-500">Last expense: 1 day ago</span>
-                    <Button variant="secondary" size="sm" onClick={() => onGroupDetails && onGroupDetails({
-                      id: 'work-lunch-crew',
-                      name: 'Work Lunch Crew',
-                      description: 'Office lunch and team outings',
-                      totalExpenses: 890.50,
-                      pendingAmount: 100.00,
-                      monthlyTotal: 890.50,
-                      members: [
-                        { id: '5', name: 'Alice Smith', username: '0x9876543210fedcba...4321', role: 'member', balance: -67.90, status: 'active' },
-                        { id: '6', name: 'Bob Johnson', username: '0xfedcba0987654321...8765', role: 'member', balance: 12.80, status: 'active' },
-                        { id: '7', name: 'Sarah Wilson', username: '0x2468135790acefbd...2468', role: 'admin', balance: 89.30, status: 'active' },
-                        { id: '8', name: 'Mike Chen', username: '0x13579bdf02468ace...1357', role: 'member', balance: -34.20, status: 'active' }
-                      ],
-                      recentExpenses: [],
-                      groupSettings: {
-                        autoApproveLimit: 30.00,
-                        requireAllApprovals: false,
-                        allowMemberInvites: true
-                      }
-                    })}>
-                      View Details
-                    </Button>
-                  </div>
-                </Card>
+                )}
               </div>
             </motion.div>
+
           </div>
         </div>
       </div>

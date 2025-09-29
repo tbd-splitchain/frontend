@@ -1,13 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ProfilePicture } from '../ui/ProfilePicture';
 import { ArrowLeft, DollarSign, Calendar, MapPin, Users, CheckCircle, Clock } from 'lucide-react';
+import { useGroupMembers, useGroupBills, useExpenseSplitter, useGroupInfo, useDebtAmount } from '@/hooks/useExpenseSplitter';
+import { useReadContract, useAccount } from 'wagmi';
+import { formatUnits, parseEther } from 'viem';
+import { getContractAddresses } from '@/contracts/config';
+import { BillSplitterABI } from '@/config/abi/bill_splitter';
 
 interface ExpenseDetailsScreenProps {
   onBack: () => void;
   expenseData?: ExpenseData;
+  groupId?: bigint;
+  billIndex?: number;
 }
 
 interface ExpenseData {
@@ -54,8 +61,266 @@ interface Participant {
   status: string;
 }
 
-export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBack, expenseData: passedExpenseData }) => {
+export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBack, expenseData: passedExpenseData, groupId, billIndex }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'split' | 'history'>('overview');
+  const [isSettling, setIsSettling] = useState(false);
+
+  const contracts = getContractAddresses();
+  const { address: currentUserAddress } = useAccount();
+  const { settleDebt, approveToken, isConfirming, isSuccess } = useExpenseSplitter();
+
+  // Use passed parameters or extract from expense data
+  const actualGroupId = groupId || (passedExpenseData?.groupId ? BigInt(passedExpenseData.groupId) : undefined);
+  const actualBillIndex = billIndex !== undefined ? billIndex : passedExpenseData?.billIndex;
+
+  console.log('ExpenseDetailsScreen - groupId:', groupId);
+  console.log('ExpenseDetailsScreen - billIndex:', billIndex);
+  console.log('ExpenseDetailsScreen - passedExpenseData:', passedExpenseData);
+  console.log('ExpenseDetailsScreen - passedExpenseData.groupId:', passedExpenseData?.groupId);
+  console.log('ExpenseDetailsScreen - passedExpenseData.billIndex:', passedExpenseData?.billIndex);
+  console.log('ExpenseDetailsScreen - actualGroupId:', actualGroupId);
+  console.log('ExpenseDetailsScreen - actualBillIndex:', actualBillIndex);
+  console.log('ExpenseDetailsScreen - contracts.EXPENSE_SPLITTER:', contracts.EXPENSE_SPLITTER);
+
+  // Load contract data for the specific bill
+  const billAmount = useReadContract({
+    address: contracts.EXPENSE_SPLITTER,
+    abi: BillSplitterABI,
+    functionName: 'getBillAmount',
+    args: actualGroupId !== undefined && actualBillIndex !== undefined ? [actualGroupId, actualBillIndex] : undefined,
+    query: {
+      enabled: !!contracts.EXPENSE_SPLITTER && actualGroupId !== undefined && actualBillIndex !== undefined,
+    },
+  });
+
+  const billDescription = useReadContract({
+    address: contracts.EXPENSE_SPLITTER,
+    abi: BillSplitterABI,
+    functionName: 'getBillDescription',
+    args: actualGroupId !== undefined && actualBillIndex !== undefined ? [actualGroupId, actualBillIndex] : undefined,
+    query: {
+      enabled: !!contracts.EXPENSE_SPLITTER && actualGroupId !== undefined && actualBillIndex !== undefined,
+    },
+  });
+
+  const billCreator = useReadContract({
+    address: contracts.EXPENSE_SPLITTER,
+    abi: BillSplitterABI,
+    functionName: 'getBillCreator',
+    args: actualGroupId !== undefined && actualBillIndex !== undefined ? [actualGroupId, actualBillIndex] : undefined,
+    query: {
+      enabled: !!contracts.EXPENSE_SPLITTER && actualGroupId !== undefined && actualBillIndex !== undefined,
+    },
+  });
+
+  const participantCount = useReadContract({
+    address: contracts.EXPENSE_SPLITTER,
+    abi: BillSplitterABI,
+    functionName: 'getBillParticipantCount',
+    args: actualGroupId !== undefined && actualBillIndex !== undefined ? [actualGroupId, actualBillIndex] : undefined,
+    query: {
+      enabled: !!contracts.EXPENSE_SPLITTER && actualGroupId !== undefined && actualBillIndex !== undefined,
+    },
+  });
+
+  // Load group members to get member details
+  const groupMembersData = useGroupMembers(actualGroupId);
+
+  // Get group info to get token address and bill creator
+  const groupInfo = useGroupInfo(actualGroupId);
+
+  // Get the debt amount between current user and bill creator
+  const debtInfo = useDebtAmount(
+    actualGroupId,
+    currentUserAddress,
+    billCreator.data as `0x${string}` | undefined
+  );
+
+  // Basic contract test - try to read member count for group 0
+  const testMemberCount = useReadContract({
+    address: contracts.EXPENSE_SPLITTER,
+    abi: BillSplitterABI,
+    functionName: 'getMemberCount',
+    args: [BigInt(0)],
+    query: {
+      enabled: !!contracts.EXPENSE_SPLITTER,
+    },
+  });
+
+  console.log('ExpenseDetailsScreen - testMemberCount:', testMemberCount.data);
+  console.log('ExpenseDetailsScreen - testMemberCount.isLoading:', testMemberCount.isLoading);
+  console.log('ExpenseDetailsScreen - testMemberCount.error:', testMemberCount.error);
+
+  // Log individual contract call results
+  console.log('ExpenseDetailsScreen - billAmount:', {
+    data: billAmount.data,
+    isLoading: billAmount.isLoading,
+    error: billAmount.error
+  });
+  console.log('ExpenseDetailsScreen - billDescription:', {
+    data: billDescription.data,
+    isLoading: billDescription.isLoading,
+    error: billDescription.error
+  });
+  console.log('ExpenseDetailsScreen - billCreator:', {
+    data: billCreator.data,
+    isLoading: billCreator.isLoading,
+    error: billCreator.error
+  });
+
+  // Create contract-based expense data
+  const contractExpenseData = useMemo(() => {
+    console.log('contractExpenseData useMemo triggered with:');
+    console.log('  - billAmount.data:', billAmount.data);
+    console.log('  - billDescription.data:', billDescription.data);
+    console.log('  - billCreator.data:', billCreator.data);
+    console.log('  - groupMembersData.members:', groupMembersData.members);
+    console.log('  - participantCount.data:', participantCount.data);
+
+    if (!billAmount.data || !billDescription.data || !billCreator.data || !groupMembersData.members) {
+      console.log('contractExpenseData: Missing required data, returning null');
+      return null;
+    }
+
+    const amountETH = parseFloat(formatUnits(billAmount.data as bigint, 18));
+    const participantCountNum = participantCount.data ? Number(participantCount.data) : groupMembersData.members.length;
+    const amountPerPerson = participantCountNum > 0 ? amountETH / participantCountNum : 0;
+
+    console.log('contractExpenseData calculations:');
+    console.log('  - amountETH:', amountETH);
+    console.log('  - participantCountNum:', participantCountNum);
+    console.log('  - amountPerPerson:', amountPerPerson);
+
+    // Find creator in group members
+    const creatorAddress = billCreator.data as string;
+    const creator = groupMembersData.members.find(m => m.address.toLowerCase() === creatorAddress.toLowerCase());
+
+    // Create participants array
+    const participants = groupMembersData.members.map(member => ({
+      name: member.name || 'Member',
+      address: member.address,
+      amount: amountPerPerson,
+      status: 'approved',
+      isCreator: member.address.toLowerCase() === creatorAddress.toLowerCase(),
+      isCurrentUser: member.address.toLowerCase() === currentUserAddress?.toLowerCase(),
+      owesAmount: member.address.toLowerCase() === creatorAddress.toLowerCase() ? 0 : amountPerPerson,
+      willReceive: member.address.toLowerCase() === creatorAddress.toLowerCase() ? amountETH - amountPerPerson : 0
+    }));
+
+    const isCurrentUserCreator = currentUserAddress?.toLowerCase() === creatorAddress.toLowerCase();
+
+    const result = {
+      id: `bill-${billIndex}`,
+      description: billDescription.data as string || 'Contract Expense',
+      amount: amountETH,
+      date: new Date().toISOString().split('T')[0],
+      timestamp: 'Recently created',
+      merchant: 'Smart Contract',
+      location: 'Blockchain',
+      paidBy: creator?.name || 'Unknown',
+      paidByAddress: creatorAddress,
+      participants,
+      status: 'pending',
+      approvals: participantCountNum,
+      totalParticipants: participantCountNum,
+      isReady: true,
+      txHash: null,
+      category: 'General',
+      splitMethod: 'equal',
+      receipt: 'On-chain',
+      notes: `Bill created on blockchain by ${creator?.name || 'Unknown'}`,
+      group: `Group ${groupId}`,
+      youWillReceive: isCurrentUserCreator ? amountETH - amountPerPerson : 0,
+      youOwe: isCurrentUserCreator ? 0 : amountPerPerson,
+      userAction: isCurrentUserCreator ? 'collect' : 'pay',
+      items: [
+        { name: billDescription.data as string || 'Expense', price: amountETH }
+      ]
+    };
+
+    console.log('contractExpenseData final result:', result);
+    return result;
+  }, [billAmount.data, billDescription.data, billCreator.data, groupMembersData.members, participantCount.data, actualGroupId, actualBillIndex]);
+
+  // Payment function for settling debt
+  const handlePayment = async () => {
+    console.log('handlePayment called - checking payment data:', {
+      actualGroupId,
+      'groupInfo.groupInfo': groupInfo.groupInfo,
+      'groupInfo.groupInfo?.token': groupInfo.groupInfo?.token,
+      'billCreator.data': billCreator.data,
+      'debtInfo.debtAmount': debtInfo.debtAmount,
+      'debtInfo.debtAmount toString': debtInfo.debtAmount?.toString(),
+      currentUserAddress,
+      'contracts.EXPENSE_SPLITTER': contracts.EXPENSE_SPLITTER
+    });
+
+    if (actualGroupId === undefined || actualGroupId === null) {
+      console.error('Missing actualGroupId');
+      return;
+    }
+    if (!groupInfo.groupInfo?.token) {
+      console.error('Missing group token address');
+      return;
+    }
+    if (!billCreator.data) {
+      console.error('Missing bill creator');
+      return;
+    }
+    if (!debtInfo.debtAmount || debtInfo.debtAmount === BigInt(0)) {
+      console.error('Missing or zero debt amount');
+      return;
+    }
+    if (!currentUserAddress) {
+      console.error('Missing current user address');
+      return;
+    }
+    if (!contracts.EXPENSE_SPLITTER) {
+      console.error('Missing contract address');
+      return;
+    }
+
+    setIsSettling(true);
+    try {
+      const tokenAddress = groupInfo.groupInfo.token;
+      const creditorAddress = billCreator.data as `0x${string}`;
+      const debtAmount = debtInfo.debtAmount;
+
+      console.log('Starting payment process:', {
+        tokenAddress,
+        creditorAddress,
+        debtAmount: debtAmount.toString(),
+        contractAddress: contracts.EXPENSE_SPLITTER
+      });
+
+      // Step 1: Approve token spending
+      console.log('Step 1: Approving token spending...');
+      try {
+        await approveToken(tokenAddress, contracts.EXPENSE_SPLITTER!, debtAmount);
+        console.log('Token approval submitted successfully');
+
+        // Add a small delay to let user see the approval transaction
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Step 2: Settle the debt
+        console.log('Step 2: Settling debt...');
+        await settleDebt(actualGroupId, creditorAddress, debtAmount);
+        console.log('Debt settlement submitted successfully');
+
+      } catch (approvalError) {
+        console.error('Approval failed:', approvalError);
+        throw approvalError;
+      }
+
+      console.log('Payment process completed successfully');
+    } catch (error) {
+      console.error('Payment failed:', error);
+      // Add user-friendly error message
+      alert(`Payment failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsSettling(false);
+    }
+  };
 
   // Use passed expense data or fallback to default
   const defaultExpenseData = {
@@ -97,7 +362,18 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
     ]
   };
 
-  const expenseData = passedExpenseData || defaultExpenseData;
+  // Loading state for contract data
+  const isLoadingContractData = actualGroupId !== undefined && actualBillIndex !== undefined &&
+    (billAmount.isLoading || billDescription.isLoading || billCreator.isLoading || groupMembersData.isLoading);
+
+  // Use contract data if available, otherwise fallback to passed data or default
+  const expenseData = contractExpenseData || passedExpenseData || defaultExpenseData;
+
+  console.log('ExpenseDetailsScreen - groupInfo:', groupInfo);
+  console.log('ExpenseDetailsScreen - debtInfo:', debtInfo);
+  console.log('ExpenseDetailsScreen - currentUserAddress:', currentUserAddress);
+  console.log('ExpenseDetailsScreen - contractExpenseData:', contractExpenseData);
+  console.log('ExpenseDetailsScreen - isLoadingContractData:', isLoadingContractData);
 
   // Enhanced expense data with additional details and safe defaults
   const detailedExpenseData = {
@@ -139,7 +415,19 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
               <ArrowLeft className="w-6 h-6 text-gray-600" />
             </Button>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">{detailedExpenseData.description}</h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-bold text-gray-900">{detailedExpenseData.description}</h1>
+                {contractExpenseData && (
+                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                    Live Data
+                  </span>
+                )}
+                {!contractExpenseData && (
+                  <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
+                    Demo Data
+                  </span>
+                )}
+              </div>
               <p className="text-gray-600">{detailedExpenseData.merchant} • {detailedExpenseData.timestamp}</p>
             </div>
           </div>
@@ -147,7 +435,7 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
             {detailedExpenseData.userAction === 'collect' && (
               <div className="text-right">
                 <div className="bg-gradient-to-r from-green-500 to-green-600 text-white px-4 py-2 rounded-xl font-bold text-lg mb-2">
-                  💰 You Will Receive: ${(detailedExpenseData.youWillReceive || 0).toFixed(2)}
+                  💰 You Will Receive: {contractExpenseData ? `${(detailedExpenseData.youWillReceive || 0).toFixed(4)} ETH` : `$${(detailedExpenseData.youWillReceive || 0).toFixed(2)}`}
                 </div>
                 <p className="text-sm text-green-600 font-medium">Others owe you money</p>
               </div>
@@ -155,7 +443,7 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
             {detailedExpenseData.userAction === 'pay' && (
               <div className="text-right">
                 <div className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 rounded-xl font-bold text-lg mb-2">
-                  💳 You Owe: ${(detailedExpenseData.youOwe || 0).toFixed(2)}
+                  💳 You Owe: {contractExpenseData ? `${(detailedExpenseData.youOwe || 0).toFixed(4)} ETH` : `$${(detailedExpenseData.youOwe || 0).toFixed(2)}`}
                 </div>
                 <p className="text-sm text-red-600 font-medium">You need to pay your share</p>
               </div>
@@ -208,16 +496,45 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
                   <span className="text-3xl">💳</span>
                 </div>
                 <h2 className="text-3xl font-bold text-red-900 mb-2">
-                  You Owe ${(detailedExpenseData.youOwe || 0).toFixed(2)}
+                  You Owe {contractExpenseData ?
+                    `${debtInfo.debtAmountFormatted} ETH` :
+                    `$${(detailedExpenseData.youOwe || 0).toFixed(2)}`
+                  }
                 </h2>
                 <p className="text-red-700 text-lg mb-4">Pay your share of the bill</p>
                 <div className="flex items-center justify-center gap-2 mb-6">
                   <Clock className="w-5 h-5 text-orange-600" />
-                  <span className="text-orange-600 font-medium">Your approval needed</span>
+                  <span className="text-orange-600 font-medium">
+                    {contractExpenseData ? 'Payment required' : 'Your approval needed'}
+                  </span>
                 </div>
-                <Button className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-2xl font-bold text-lg">
-                  Pay Your Share
+                <Button
+                  className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-2xl font-bold text-lg disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  onClick={() => {
+                    console.log('Pay Your Share button clicked');
+                    handlePayment();
+                  }}
+                  disabled={isSettling || isConfirming || !contractExpenseData || debtInfo.debtAmount === BigInt(0)}
+                >
+                  {isSettling ? 'Approving & Settling...' :
+                   isConfirming ? 'Confirming Transaction...' :
+                   contractExpenseData ? 'Pay Your Share' : 'Demo Mode - No Payment'}
                 </Button>
+                {contractExpenseData && debtInfo.debtAmount > BigInt(0) && (
+                  <p className="text-xs text-gray-600 mt-2">
+                    This will approve and transfer {debtInfo.debtAmountFormatted} ETH tokens
+                  </p>
+                )}
+                {contractExpenseData && debtInfo.debtAmount === BigInt(0) && (
+                  <p className="text-xs text-yellow-600 mt-2">
+                    No debt found - you may have already paid or are not part of this bill
+                  </p>
+                )}
+                {contractExpenseData && !currentUserAddress && (
+                  <p className="text-xs text-red-600 mt-2">
+                    Please connect your wallet to pay
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -234,7 +551,9 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-500 text-sm">Total Amount</p>
-                  <p className="text-2xl font-bold text-gray-900">${(detailedExpenseData.amount || 0).toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {contractExpenseData ? `${(detailedExpenseData.amount || 0).toFixed(4)} ETH` : `$${(detailedExpenseData.amount || 0).toFixed(2)}`}
+                  </p>
                 </div>
                 <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
                   <DollarSign className="w-6 h-6 text-blue-600" />
@@ -270,7 +589,12 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-500 text-sm">Per Person</p>
-                  <p className="text-2xl font-bold text-gray-900">${((detailedExpenseData.amount || 0) / Math.max(detailedExpenseData.participants.length, 1)).toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {contractExpenseData ?
+                      `${((detailedExpenseData.amount || 0) / Math.max(detailedExpenseData.participants.length, 1)).toFixed(4)} ETH` :
+                      `$${((detailedExpenseData.amount || 0) / Math.max(detailedExpenseData.participants.length, 1)).toFixed(2)}`
+                    }
+                  </p>
                 </div>
                 <div className="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center">
                   <Calendar className="w-6 h-6 text-purple-600" />
@@ -450,13 +774,19 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
                         </div>
                         <p className="text-sm font-medium mt-2">
                           {detailedExpenseData.userAction === 'collect' ? (
-                            <span className="text-green-600">Will transfer ${(participant.amount || 0).toFixed(2)} to you</span>
+                            <span className="text-green-600">
+                              Will transfer {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`} to you
+                            </span>
                           ) : participant.name.includes('You') ? (
-                            <span className="text-red-600">You need to pay ${(participant.amount || 0).toFixed(2)}</span>
+                            <span className="text-red-600">
+                              You need to pay {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`}
+                            </span>
                           ) : participant.status === 'paid' ? (
                             <span className="text-blue-600">Already covered their share</span>
                           ) : (
-                            <span className="text-gray-600">Will pay ${(participant.amount || 0).toFixed(2)}</span>
+                            <span className="text-gray-600">
+                              Will pay {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`}
+                            </span>
                           )}
                         </p>
                       </div>
@@ -467,7 +797,7 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
                         participant.name.includes('You') ? 'text-red-600' :
                         'text-gray-900'
                       }`}>
-                        ${(participant.amount || 0).toFixed(2)}
+                        {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`}
                       </p>
                       <p className="text-sm text-gray-500">
                         {(((participant.amount || 0) / Math.max(detailedExpenseData.amount || 1, 1)) * 100).toFixed(1)}% of total

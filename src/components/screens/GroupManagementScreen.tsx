@@ -4,6 +4,11 @@ import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ProfilePicture } from '../ui/ProfilePicture';
 import { ArrowLeft, Plus, Settings, Users, DollarSign, Calendar, MoreVertical, UserPlus, MessageCircle } from 'lucide-react';
+import { useAccount } from 'wagmi';
+import { useExpenseSplitter, useGroupInfo, useMemberBalance, useMemberCount, useGroupMembers, useGroupBills } from '@/hooks/useExpenseSplitter';
+import { formatEther } from 'viem';
+import { toast } from 'react-hot-toast';
+import { getContractAddresses } from '@/contracts/config';
 
 interface GroupMember {
   id: string;
@@ -65,51 +70,228 @@ interface GroupManagementScreenProps {
   onGroupDetails?: (groupData?: GroupData) => void;
 }
 
+interface Member {
+  name: string;
+  address: string;
+}
+
 export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ onBack, onGroupDetails }) => {
   const [activeTab, setActiveTab] = useState<'groups' | 'create'>('groups');
+  const [groupName, setGroupName] = useState('');
+  const [selectedToken, setSelectedToken] = useState('WETH');
+  const [members, setMembers] = useState<Member[]>([]);
+  const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberAddress, setNewMemberAddress] = useState('');
 
-  const groups: GroupData[] = [
-    {
-      id: '1',
-      name: 'SF Roommates',
-      description: 'Shared expenses for San Francisco apartment',
-      totalExpenses: 1250.40,
-      pendingAmount: 200.00,
-      monthlyTotal: 1250.40,
-      members: [
-        { id: '1', name: 'ogazboiz', username: '0x1234567890abcdef...1234', role: 'admin', balance: 45.20, status: 'active' },
-        { id: '2', name: 'Jimmy Cooper', username: '0xabcd1234567890ef...5678', role: 'member', balance: -23.50, status: 'active' },
-        { id: '3', name: 'Guy Hawkins', username: '0xef9876543210abcd...9abc', role: 'member', balance: 0, status: 'active' },
-        { id: '4', name: 'Robert Fox', username: '0x567890abcdef1234...def0', role: 'member', balance: -21.70, status: 'active' }
-      ],
-      recentExpenses: [],
-      groupSettings: {
-        autoApproveLimit: 50.00,
-        requireAllApprovals: true,
-        allowMemberInvites: true
-      }
-    },
-    {
-      id: '2',
-      name: 'Work Lunch Crew',
-      description: 'Office lunch and team outings',
-      totalExpenses: 890.50,
-      pendingAmount: 100.00,
-      monthlyTotal: 890.50,
-      members: [
-        { id: '5', name: 'Alice Smith', username: '0x9876543210fedcba...4321', role: 'member', balance: -67.90, status: 'active' },
-        { id: '6', name: 'Bob Johnson', username: '0xfedcba0987654321...8765', role: 'member', balance: 12.80, status: 'active' },
-        { id: '7', name: 'Sarah Wilson', username: '0x2468135790acefbd...2468', role: 'admin', balance: 89.30, status: 'active' },
-        { id: '8', name: 'Mike Chen', username: '0x13579bdf02468ace...1357', role: 'member', balance: -34.20, status: 'active' }
-      ],
-      recentExpenses: [],
-      groupSettings: {
-        autoApproveLimit: 30.00,
-        requireAllApprovals: false,
-        allowMemberInvites: true
-      }
+  const { address, isConnected } = useAccount();
+  const expenseSplitter = useExpenseSplitter();
+
+  // Expanded solution: Check more group IDs since your group might be at a higher ID
+  // Use our existing hooks to check groups 0-9
+  const group0 = useGroupInfo(BigInt(0));
+  const group1 = useGroupInfo(BigInt(1));
+  const group2 = useGroupInfo(BigInt(2));
+  const group3 = useGroupInfo(BigInt(3));
+  const group4 = useGroupInfo(BigInt(4));
+  const group5 = useGroupInfo(BigInt(5));
+  const group6 = useGroupInfo(BigInt(6));
+  const group7 = useGroupInfo(BigInt(7));
+  const group8 = useGroupInfo(BigInt(8));
+  const group9 = useGroupInfo(BigInt(9));
+
+  // Check membership in each group
+  const member0 = useMemberBalance(BigInt(0), address);
+  const member1 = useMemberBalance(BigInt(1), address);
+  const member2 = useMemberBalance(BigInt(2), address);
+  const member3 = useMemberBalance(BigInt(3), address);
+  const member4 = useMemberBalance(BigInt(4), address);
+  const member5 = useMemberBalance(BigInt(5), address);
+  const member6 = useMemberBalance(BigInt(6), address);
+  const member7 = useMemberBalance(BigInt(7), address);
+  const member8 = useMemberBalance(BigInt(8), address);
+  const member9 = useMemberBalance(BigInt(9), address);
+
+  // Get actual member counts using dedicated hook (more reliable than getGroupInfo)
+  const count0 = useMemberCount(BigInt(0));
+  const count1 = useMemberCount(BigInt(1));
+  const count2 = useMemberCount(BigInt(2));
+  const count3 = useMemberCount(BigInt(3));
+  const count4 = useMemberCount(BigInt(4));
+  const count5 = useMemberCount(BigInt(5));
+  const count6 = useMemberCount(BigInt(6));
+  const count7 = useMemberCount(BigInt(7));
+  const count8 = useMemberCount(BigInt(8));
+  const count9 = useMemberCount(BigInt(9));
+
+  // Helper function to create group object - use reliable member count
+  const createGroupObject = (groupData: any, membersData: any, memberCountData: any, id: string) => {
+    // Use the reliable getMemberCount instead of corrupted getGroupInfo.memberCount
+    const actualMemberCount = memberCountData?.memberCount ? Number(memberCountData.memberCount) : 0;
+    const hasValidMembers = actualMemberCount > 0;
+
+    if (!hasValidMembers) return null;
+
+    // Clean up corrupted names
+    let groupName = groupData?.name || `Group ${id}`;
+    if (groupName && (groupName.includes('\u0000') || groupName.includes('\u0002') || groupName.includes('\u0004'))) {
+      groupName = `Group ${id}`; // Use fallback name for corrupted data
     }
-  ];
+
+    return {
+      id,
+      name: groupName,
+      description: `Group with ${actualMemberCount} members (Bills: ${groupData?.billCount || 0})`,
+      totalExpenses: 0,
+      pendingAmount: 0,
+      monthlyTotal: 0,
+      members: [],
+      recentExpenses: []
+    };
+  };
+
+  // Filter groups where user is a member - use reliable member counts
+  const groups = [
+    createGroupObject(group0.groupInfo, member0, count0, '0'),
+    createGroupObject(group1.groupInfo, member1, count1, '1'),
+    createGroupObject(group2.groupInfo, member2, count2, '2'),
+    createGroupObject(group3.groupInfo, member3, count3, '3'),
+    createGroupObject(group4.groupInfo, member4, count4, '4'),
+    createGroupObject(group5.groupInfo, member5, count5, '5'),
+    createGroupObject(group6.groupInfo, member6, count6, '6'),
+    createGroupObject(group7.groupInfo, member7, count7, '7'),
+    createGroupObject(group8.groupInfo, member8, count8, '8'),
+    createGroupObject(group9.groupInfo, member9, count9, '9'),
+  ].filter(Boolean);
+
+  // Debug logging - show all groups to find your groups
+  console.log('Group data debug:', {
+    validGroups: groups.length,
+    group0: {
+      reliableMemberCount: count0.memberCount ? Number(count0.memberCount) : 0,
+      corruptedMemberCount: group0.groupInfo?.memberCount ? Number(group0.groupInfo.memberCount) : 0,
+      hasValidMembers: count0.memberCount ? Number(count0.memberCount) > 0 : false
+    },
+    group1: {
+      reliableMemberCount: count1.memberCount ? Number(count1.memberCount) : 0,
+      corruptedMemberCount: group1.groupInfo?.memberCount ? Number(group1.groupInfo.memberCount) : 0,
+      hasValidMembers: count1.memberCount ? Number(count1.memberCount) > 0 : false
+    },
+    foundGroups: groups.map(g => `${g?.name} (${g?.id})`),
+    memberCountErrors: {
+      count0Error: count0.error,
+      count1Error: count1.error
+    }
+  });
+  // Add a new member to the list
+  const addMember = () => {
+    if (!newMemberName.trim() || !newMemberAddress.trim()) {
+      toast.error('Please enter both member name and address');
+      return;
+    }
+
+    if (!newMemberAddress.startsWith('0x') || newMemberAddress.length !== 42) {
+      toast.error('Please enter a valid Ethereum address (0x followed by 40 hex characters)');
+      return;
+    }
+
+    // Check for duplicate addresses
+    if (members.some(member => member.address.toLowerCase() === newMemberAddress.toLowerCase())) {
+      toast.error('This address is already added to the group');
+      return;
+    }
+
+    // Check if it's the current user's address (they will be added as group creator automatically)
+    if (address && newMemberAddress.toLowerCase() === address.toLowerCase()) {
+      toast.error('You will be added as the group creator automatically - no need to add yourself');
+      return;
+    }
+
+    setMembers([...members, { name: newMemberName.trim(), address: newMemberAddress.trim() }]);
+    setNewMemberName('');
+    setNewMemberAddress('');
+  };
+
+  // Remove member from list
+  const removeMember = (index: number) => {
+    setMembers(members.filter((_, i) => i !== index));
+  };
+
+  const handleCreateGroup = async () => {
+    if (!groupName.trim() || !address) {
+      toast.error('Please fill in group name and connect wallet');
+      return;
+    }
+
+    // Validate minimum 2 members requirement (including current user)
+    if (members.length === 0) {
+      toast.error('Please add at least 1 other member (minimum 2 total members required)');
+      return;
+    }
+
+    // Prepare data for contract
+    const memberNames = ['You', ...members.map(member => member.name)];
+    const memberAddresses = [address as `0x${string}`, ...members.map(member => member.address as `0x${string}`)];
+
+    console.log('Creating group with:', {
+      name: groupName,
+      memberNames,
+      memberAddresses,
+      totalMembers: memberNames.length
+    });
+
+    try {
+      // Use selected token address
+      const contracts = getContractAddresses();
+      const tokenAddress = contracts.TOKENS?.[selectedToken as keyof typeof contracts.TOKENS] ||
+        contracts.TOKENS?.WETH ||
+        '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73'; // Fallback to WETH
+
+      console.log('Creating group with selected token:', { selectedToken, tokenAddress });
+
+      await expenseSplitter.createGroup(
+        groupName,
+        tokenAddress, // Use real WETH token address
+        memberNames,    // Actual member names
+        memberAddresses // Corresponding addresses
+      );
+
+      // Reset form
+      setGroupName('');
+      setSelectedToken('WETH');
+      setMembers([]);
+      toast.success('Group created successfully! It will appear in your groups list shortly.');
+
+      // Switch to groups tab to see the new group
+      setActiveTab('groups');
+    } catch (error) {
+      console.error('Error creating group:', error);
+      // Error toast is handled in the hook
+    }
+  };
+
+  // Handle viewing group details with real contract data
+  const handleViewGroupDetails = (group: any) => {
+    if (!onGroupDetails) return;
+
+    // Create group data object with contract information
+    const groupData = {
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      totalExpenses: 0, // Will be calculated from bills
+      pendingAmount: 0, // Will be calculated from debts
+      monthlyTotal: 0, // Will be calculated from bills
+      members: [], // Will be loaded by GroupDetailsScreen using useGroupMembers
+      recentExpenses: [], // Will be loaded by GroupDetailsScreen using useGroupBills
+      groupSettings: {
+        autoApproveLimit: 0,
+        requireAllApprovals: false,
+        allowMemberInvites: true,
+      }
+    };
+
+    onGroupDetails(groupData);
+  };
 
   const getBalanceColor = (balance: number) => {
     if (balance > 0) return 'text-green-600';
@@ -274,10 +456,18 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
                     {/* Actions */}
                     <div className="flex items-center justify-between mt-6 pt-6 border-t border-gray-200">
                       <div className="flex items-center gap-3">
-                        <Button variant="secondary" size="sm" onClick={onGroupDetails}>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleViewGroupDetails(group)}
+                        >
                           View Expenses
                         </Button>
-                        <Button variant="secondary" size="sm" onClick={onGroupDetails}>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleViewGroupDetails(group)}
+                        >
                           Settlement History
                         </Button>
                       </div>
@@ -308,6 +498,8 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
                       </label>
                       <input
                         type="text"
+                        value={groupName}
+                        onChange={(e) => setGroupName(e.target.value)}
                         placeholder="e.g., SF Roommates, Work Lunch Crew"
                         className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent"
                       />
@@ -315,33 +507,109 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Description
+                        Payment Token
                       </label>
-                      <textarea
-                        placeholder="Describe the purpose of this group..."
-                        rows={3}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent"
-                      />
+                      <select
+                        value={selectedToken}
+                        onChange={(e) => setSelectedToken(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent bg-white"
+                      >
+                        <option value="WETH">WETH - Wrapped Ethereum</option>
+                        <option value="USDC">USDC - USD Coin</option>
+                        <option value="CUSTOM">CUSTOM - Your Custom Token</option>
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        All expenses in this group will use {selectedToken} tokens. Members need to have {selectedToken} to participate.
+                      </p>
+                      {selectedToken === 'CUSTOM' && (
+                        <p className="text-xs text-blue-600 mt-1 font-mono">
+                          Token Address: 0x0f764437ffBE1fcd0d0d276a164610422710B482
+                        </p>
+                      )}
                     </div>
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Add Members
                       </label>
-                      <div className="space-y-3">
-                        <div className="flex gap-3">
+
+                      {/* Add Member Form */}
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <input
                             type="text"
-                            placeholder="Enter wallet address or username"
-                            className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent"
+                            placeholder="Member name (e.g., Alice, Bob)"
+                            value={newMemberName}
+                            onChange={(e) => setNewMemberName(e.target.value)}
+                            className="px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent"
                           />
-                          <Button variant="secondary" icon={<UserPlus className="w-5 h-5" />}>
-                            Add
-                          </Button>
+                          <input
+                            type="text"
+                            placeholder="0x... wallet address"
+                            value={newMemberAddress}
+                            onChange={(e) => setNewMemberAddress(e.target.value)}
+                            className="px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent"
+                          />
                         </div>
-                        <div className="text-sm text-gray-500">
-                          You can add friends by their wallet address or username
+                        <Button
+                          variant="secondary"
+                          onClick={addMember}
+                          disabled={!newMemberName.trim() || !newMemberAddress.trim()}
+                          icon={<UserPlus className="w-5 h-5" />}
+                        >
+                          Add Member
+                        </Button>
+                      </div>
+
+                      {/* Members List */}
+                      {members.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                          <h4 className="text-sm font-medium text-gray-700">Group Members:</h4>
+                          <div className="bg-gray-50 rounded-lg p-3">
+                            {/* Current User */}
+                            <div className="flex items-center justify-between py-2">
+                              <div className="flex items-center gap-3">
+                                <ProfilePicture name="You" size="sm" />
+                                <div>
+                                  <span className="text-sm font-medium text-gray-900">You</span>
+                                  <span className="ml-2 px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">Admin</span>
+                                </div>
+                              </div>
+                              <span className="text-xs text-gray-500 font-mono">
+                                {address ? `${address.slice(0, 6)}...${address.slice(-4)}` : ''}
+                              </span>
+                            </div>
+
+                            {/* Added Members */}
+                            {members.map((member, index) => (
+                              <div key={index} className="flex items-center justify-between py-2 border-t border-gray-200">
+                                <div className="flex items-center gap-3">
+                                  <ProfilePicture name={member.name} size="sm" />
+                                  <span className="text-sm font-medium text-gray-900">{member.name}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-gray-500 font-mono">
+                                    {member.address.slice(0, 6)}...{member.address.slice(-4)}
+                                  </span>
+                                  <button
+                                    onClick={() => removeMember(index)}
+                                    className="text-red-500 hover:text-red-700 p-1"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
+                      )}
+
+                      <div className="text-sm text-gray-500 mt-2">
+                        Add at least 1 other member (minimum 2 total members required)
+                        <br />
+                        <span className="text-xs text-orange-600">
+                          📋 You will be automatically added as the group admin
+                        </span>
                       </div>
                     </div>
 
@@ -358,8 +626,12 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
                       <Button variant="secondary" onClick={() => setActiveTab('groups')}>
                         Cancel
                       </Button>
-                      <Button variant="primary" onClick={() => setActiveTab('groups')}>
-                        Create Group
+                      <Button
+                        variant="primary"
+                        onClick={handleCreateGroup}
+                        disabled={expenseSplitter.isPending || !groupName.trim() || members.length === 0}
+                      >
+                        {expenseSplitter.isPending ? 'Creating...' : `Create Group (${members.length + 1} members)`}
                       </Button>
                     </div>
                   </div>

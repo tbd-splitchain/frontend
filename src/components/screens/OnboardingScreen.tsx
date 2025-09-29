@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '../ui/Button';
-import { ArrowRight, Apple, Chrome } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { FolderAnimation } from '../illustrations/FolderAnimation';
+import ConnectWallet from '../ConnectWallet';
 
 interface OnboardingScreenProps {
   onNext: () => void;
@@ -11,6 +12,7 @@ interface OnboardingScreenProps {
 export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ onNext }) => {
   const [currentSlide, setCurrentSlide] = useState(0);
   const totalSlides = 3;
+  const [isWalletConnected, setIsWalletConnected] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -96,70 +98,34 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ onNext }) =>
                 ))}
               </motion.div>
 
-              {/* Social Login */}
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.8, delay: 0.9 }}
-                className="space-y-6"
-              >
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-gray-300"></div>
-                  </div>
-                  <div className="relative flex justify-center text-sm">
-                    <span className="px-6 bg-white text-gray-500 font-medium">or continue with</span>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <Button
-                    variant="social"
-                    className="py-4 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-all duration-200"
-                    icon={<Apple className="w-6 h-6 text-gray-700" />}
-                    onClick={onNext}
-                  >
-                    <span className="font-medium text-gray-700 ml-2">Apple</span>
-                  </Button>
-                  <Button
-                    variant="social"
-                    className="py-4 rounded-xl border border-gray-200 hover:border-gray-300 hover:bg-gray-50 transition-all duration-200"
-                    icon={<Chrome className="w-6 h-6" />}
-                    onClick={onNext}
-                  >
-                    <span className="font-medium text-gray-700 ml-2">Google</span>
-                  </Button>
-                </div>
-              </motion.div>
-
-              {/* Sign In Link */}
-              <motion.p
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.8, delay: 1.2 }}
-                className="text-gray-600"
-              >
-                Already have an account?{' '}
-                <button className="text-[#7C3AED] font-semibold hover:underline hover:text-[#6D28D9] transition-colors" onClick={onNext}>
-                  Sign In
-                </button>
-              </motion.p>
-
-              {/* Next Button */}
+              {/* Get Started Button */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.8, delay: 1.5 }}
               >
-                <Button
-                  variant="primary"
-                  size="lg"
-                  className="w-full bg-[#7C3AED] hover:bg-[#6D28D9] text-white py-4 rounded-xl font-semibold shadow-lg"
-                  icon={<ArrowRight className="w-6 h-6" />}
-                  onClick={onNext}
-                >
-                  Get Started
-                </Button>
+                {isWalletConnected ? (
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    className="w-full bg-green-600 hover:bg-green-700 text-white py-4 rounded-xl font-semibold shadow-lg"
+                    icon={<ArrowRight className="w-6 h-6" />}
+                    onClick={onNext}
+                  >
+                    Continue to Dashboard
+                  </Button>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-center text-gray-600 text-sm">
+                      Connect your wallet to get started
+                    </p>
+                    <ConnectWallet
+                      variant="onboarding"
+                      onConnectionChange={setIsWalletConnected}
+                    />
+                  </div>
+                )}
               </motion.div>
             </div>
           </div>

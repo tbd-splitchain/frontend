@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ProfilePicture } from '../ui/ProfilePicture';
 import { ArrowLeft, Plus, DollarSign, Calendar, Users, TrendingUp, AlertCircle } from 'lucide-react';
+import { useGroupMembers, useGroupBills, useGroupInfo } from '@/hooks/useExpenseSplitter';
+import { formatUnits } from 'viem';
+import { CreateExpenseScreen } from './CreateExpenseScreen';
 
 interface GroupData {
   id: string;
@@ -66,6 +69,29 @@ interface GroupDetailsScreenProps {
 
 export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, onExpenseDetails, groupData: passedGroupData }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'expenses' | 'members'>('overview');
+  const [showCreateExpense, setShowCreateExpense] = useState(false);
+
+  // Extract group ID from passed data - ensure it's a valid number
+  let groupId: bigint | undefined;
+  try {
+    if (passedGroupData?.id !== undefined) {
+      groupId = BigInt(passedGroupData.id);
+    }
+  } catch (error) {
+    console.error('Failed to convert group ID to BigInt:', passedGroupData?.id, error);
+    groupId = undefined;
+  }
+
+  console.log('GroupDetailsScreen - passedGroupData:', passedGroupData);
+  console.log('GroupDetailsScreen - groupId:', groupId);
+
+  // Load real contract data
+  const groupInfo = useGroupInfo(groupId);
+  const groupMembersData = useGroupMembers(groupId);
+  const groupBillsData = useGroupBills(groupId);
+
+  // Loading state
+  const isLoading = groupId && (groupMembersData.isLoading || groupBillsData.isLoading || groupInfo.isLoading);
 
   // Default SF Roommates data
   const sfRoommatesData = {
@@ -348,8 +374,105 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
     }
   };
 
-  // Use passed group data or determine which group to show
-  const groupData = passedGroupData?.id === 'work-lunch-crew' ? workLunchCrewData : sfRoommatesData;
+  // Transform contract data into UI format
+  const contractGroupData = useMemo(() => {
+    console.log('contractGroupData useMemo - checking data:');
+    console.log('  - groupInfo.groupInfo:', groupInfo.groupInfo);
+    console.log('  - groupMembersData.members:', groupMembersData.members);
+    console.log('  - groupMembersData.isLoading:', groupMembersData.isLoading);
+    console.log('  - groupBillsData.bills:', groupBillsData.bills);
+    console.log('  - groupBillsData.isLoading:', groupBillsData.isLoading);
+    console.log('  - groupBillsData.error:', groupBillsData.error);
+    console.log('  - passedGroupData:', passedGroupData);
+
+    if (!groupInfo.groupInfo || !groupMembersData.members || !groupBillsData.bills || !passedGroupData) {
+      console.log('contractGroupData: Missing required data, returning null');
+      return null;
+    }
+
+    // Transform members data
+    const transformedMembers = groupMembersData.members.map((member, index) => ({
+      id: index.toString(),
+      name: member.name || `Member ${index + 1}`,
+      username: member.address,
+      balance: parseFloat(formatUnits(member.netBalance, 18)),
+      status: 'active',
+      role: index === 0 ? 'admin' : 'member'
+    }));
+
+    // Transform bills data
+    const transformedExpenses = groupBillsData.bills.map((bill, index) => {
+      const billAmountETH = bill.amount ? parseFloat(formatUnits(bill.amount, 18)) : 0;
+      const amountPerPerson = transformedMembers.length > 0 ? billAmountETH / transformedMembers.length : 0;
+
+      console.log(`Bill ${index}:`, {
+        description: bill.description,
+        amountWei: bill.amount,
+        amountETH: billAmountETH,
+        memberCount: transformedMembers.length,
+        amountPerPerson: amountPerPerson
+      });
+
+      return {
+        id: `bill-${index}`,
+        billIndex: index, // Add bill index for expense details
+        groupId: passedGroupData.id, // Add group ID for expense details
+        description: bill.description || `Expense ${index + 1}`,
+        amount: billAmountETH,
+        date: new Date().toISOString().split('T')[0],
+        timestamp: 'Recently',
+        merchant: 'Contract',
+        location: 'Blockchain',
+        paidBy: bill.creator || 'Unknown',
+        participants: transformedMembers.map(member => ({
+          name: member.name,
+          amount: amountPerPerson,
+          status: 'approved'
+        })),
+        status: 'pending', // Bills don't have settled status in the current structure
+        approvals: transformedMembers.length,
+        totalParticipants: transformedMembers.length,
+        isReady: true,
+        txHash: null,
+        category: 'General',
+        splitMethod: 'equal',
+        receipt: 'N/A',
+        notes: bill.description || '',
+        youWillReceive: 0,
+        youOwe: 0,
+        userAction: 'view',
+        items: []
+      };
+    });
+
+    // Calculate totals
+    const totalExpenses = transformedExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+    const pendingExpenses = transformedExpenses.filter(e => e.status === 'pending');
+    const pendingAmount = pendingExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+
+    return {
+      id: passedGroupData.id,
+      name: `Group ${passedGroupData.id}`,
+      description: passedGroupData.description || 'Blockchain expense group',
+      totalExpenses,
+      pendingAmount,
+      monthlyTotal: totalExpenses,
+      members: transformedMembers,
+      recentExpenses: transformedExpenses,
+      groupSettings: {
+        autoApproveLimit: 50.00,
+        requireAllApprovals: true,
+        allowMemberInvites: true
+      }
+    };
+  }, [groupInfo.groupInfo, groupMembersData.members, groupBillsData.bills, passedGroupData]);
+
+  // Use contract data if available, otherwise fall back to dummy data with proper naming
+  const fallbackData = passedGroupData?.id === 'work-lunch-crew' ? workLunchCrewData : sfRoommatesData;
+  if (passedGroupData && !contractGroupData) {
+    fallbackData.name = `Group ${passedGroupData.id}`;
+  }
+  const groupData = contractGroupData || fallbackData;
 
   const getBalanceColor = (balance: number) => {
     if (balance > 0) return 'text-green-600 bg-green-50';
@@ -357,6 +480,72 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
     return 'text-gray-600 bg-gray-50';
   };
 
+  // Calculate user's balance in the group
+  const userBalance = useMemo(() => {
+    if (contractGroupData?.members) {
+      // Find the first member (assumes current user is first member/creator)
+      const userMember = contractGroupData.members[0];
+      return userMember?.balance || 0;
+    }
+    return 45.20; // fallback to dummy data
+  }, [contractGroupData]);
+
+
+  // Show create expense screen
+  if (showCreateExpense) {
+    // Prepare group members data (use contract data if available, otherwise fallback)
+    const membersForExpense = contractGroupData?.members?.map(m => ({
+      address: m.username,
+      name: m.name
+    })) || groupData.members?.map(m => ({
+      address: m.username,
+      name: m.name
+    })) || [];
+
+    console.log('GroupDetailsScreen - About to render CreateExpenseScreen with:');
+    console.log('  - groupId:', groupId);
+    console.log('  - groupId type:', typeof groupId);
+    console.log('  - membersForExpense:', membersForExpense);
+    console.log('  - passedGroupData:', passedGroupData);
+    console.log('  - contractGroupData:', contractGroupData);
+    console.log('  - groupBillsData:', groupBillsData);
+
+    return (
+      <CreateExpenseScreen
+        onBack={() => setShowCreateExpense(false)}
+        groupId={groupId}
+        groupMembers={membersForExpense}
+      />
+    );
+  }
+
+  // Show loading state while fetching contract data
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50/20">
+        <div className="max-w-6xl mx-auto px-6 py-8">
+          <div className="flex items-center gap-4 mb-8">
+            <Button variant="ghost" className="p-3" onClick={onBack}>
+              <ArrowLeft className="w-6 h-6 text-gray-600" />
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Loading Group Details...</h1>
+              <p className="text-gray-600">Fetching data from blockchain...</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            {[1, 2, 3, 4].map(i => (
+              <Card key={i} className="p-6 animate-pulse">
+                <div className="h-4 bg-gray-200 rounded mb-2"></div>
+                <div className="h-8 bg-gray-200 rounded mb-1"></div>
+                <div className="h-3 bg-gray-200 rounded"></div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50/20">
@@ -368,11 +557,27 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
               <ArrowLeft className="w-6 h-6 text-gray-600" />
             </Button>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">{groupData.name}</h1>
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-bold text-gray-900">{groupData.name}</h1>
+                {contractGroupData && (
+                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                    Live Data
+                  </span>
+                )}
+                {!contractGroupData && (
+                  <span className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
+                    Demo Data
+                  </span>
+                )}
+              </div>
               <p className="text-gray-600">{groupData.description}</p>
             </div>
           </div>
-          <Button variant="primary" icon={<Plus className="w-5 h-5" />}>
+          <Button
+            variant="primary"
+            icon={<Plus className="w-5 h-5" />}
+            onClick={() => setShowCreateExpense(true)}
+          >
             Add Expense
           </Button>
         </div>
@@ -388,7 +593,9 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-500 text-sm mb-1">This Month</p>
-                  <p className="text-2xl font-bold text-gray-900">${groupData.monthlyTotal.toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {contractGroupData ? `${groupData.monthlyTotal.toFixed(4)} ETH` : `$${groupData.monthlyTotal.toFixed(2)}`}
+                  </p>
                   <p className="text-xs text-gray-400">Total expenses</p>
                 </div>
                 <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
@@ -407,7 +614,9 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-orange-600 text-sm mb-1 font-medium">Pending Settlements</p>
-                  <p className="text-2xl font-bold text-gray-900">${groupData.pendingAmount.toFixed(2)}</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {contractGroupData ? `${groupData.pendingAmount.toFixed(4)} ETH` : `$${groupData.pendingAmount.toFixed(2)}`}
+                  </p>
                   <p className="text-xs text-orange-500">Needs approval</p>
                 </div>
                 <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center">
@@ -445,8 +654,12 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-500 text-sm mb-1">Your Balance</p>
-                  <p className="text-2xl font-bold text-green-600">+$45.20</p>
-                  <p className="text-xs text-green-500">Others owe you</p>
+                  <p className={`text-2xl font-bold ${userBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {userBalance >= 0 ? '+' : ''}${Math.abs(userBalance).toFixed(2)}
+                  </p>
+                  <p className={`text-xs ${userBalance >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {userBalance > 0 ? 'Others owe you' : userBalance < 0 ? 'You owe others' : 'All settled'}
+                  </p>
                 </div>
                 <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
                   <TrendingUp className="w-6 h-6 text-green-600" />
@@ -495,7 +708,10 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
               <div className="space-y-4">
                 {groupData.recentExpenses.slice(0, 3).map((expense) => (
-                  <div key={expense.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer" onClick={() => onExpenseDetails && onExpenseDetails(expense)}>
+                  <div key={expense.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer" onClick={() => {
+                    console.log('Clicking expense:', expense);
+                    onExpenseDetails && onExpenseDetails(expense);
+                  }}>
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl flex items-center justify-center">
                         <span className="text-lg font-bold text-blue-600">
@@ -513,7 +729,9 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
                       </div>
                     </div>
                     <div className="text-right">
-                      <p className="font-bold text-gray-900 text-lg">${expense.amount.toFixed(2)}</p>
+                      <p className="font-bold text-gray-900 text-lg">
+                        {contractGroupData ? `${expense.amount.toFixed(4)} ETH` : `$${expense.amount.toFixed(2)}`}
+                      </p>
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                         expense.status === 'settled' ? 'bg-green-100 text-green-700' :
                         expense.status === 'pending' ? 'bg-orange-100 text-orange-700' :
@@ -586,7 +804,10 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
               </div>
               <div className="space-y-4">
                 {groupData.recentExpenses.map((expense) => (
-                  <div key={expense.id} className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm hover:shadow-lg transition-all cursor-pointer" onClick={() => onExpenseDetails && onExpenseDetails(expense)}>
+                  <div key={expense.id} className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm hover:shadow-lg transition-all cursor-pointer" onClick={() => {
+                    console.log('Clicking expense (expenses tab):', expense);
+                    onExpenseDetails && onExpenseDetails(expense);
+                  }}>
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-4">
                         <div className="w-16 h-16 bg-gradient-to-br from-blue-100 to-purple-100 rounded-2xl flex items-center justify-center">
@@ -618,7 +839,9 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-3xl font-bold text-gray-900">${expense.amount.toFixed(2)}</p>
+                        <p className="text-3xl font-bold text-gray-900">
+                          {contractGroupData ? `${expense.amount.toFixed(4)} ETH` : `$${expense.amount.toFixed(2)}`}
+                        </p>
                         {expense.status === 'pending' && (
                           <div className="flex items-center justify-end gap-2 mt-2">
                             <div className="w-20 bg-gray-200 rounded-full h-2">
@@ -660,7 +883,9 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
                               </div>
                             </div>
                             <div className="text-right">
-                              <p className="text-sm font-bold text-gray-900">${participant.amount.toFixed(2)}</p>
+                              <p className="text-sm font-bold text-gray-900">
+                                {contractGroupData ? `${participant.amount.toFixed(4)} ETH` : `$${participant.amount.toFixed(2)}`}
+                              </p>
                             </div>
                           </div>
                         ))}
@@ -684,7 +909,10 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
                           ))}
                         </div>
                         <span className="text-sm text-gray-500">
-                          {expense.participants.length} participants • ${(expense.amount / expense.participants.length).toFixed(2)} each
+                          {expense.participants.length} participants • {contractGroupData ?
+                            `${(expense.amount / expense.participants.length).toFixed(4)} ETH` :
+                            `$${(expense.amount / expense.participants.length).toFixed(2)}`
+                          } each
                         </span>
                       </div>
                       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
