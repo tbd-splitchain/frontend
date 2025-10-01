@@ -4,7 +4,7 @@ import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ProfilePicture } from '../ui/ProfilePicture';
 import { ArrowLeft, DollarSign, Calendar, MapPin, Users, CheckCircle, Clock } from 'lucide-react';
-import { useGroupMembers, useGroupBills, useExpenseSplitter, useGroupInfo, useDebtAmount } from '@/hooks/useExpenseSplitter';
+import { useGroupMembers, useGroupBills, useExpenseSplitter, useGroupInfo, useDebtAmount, useGroupCreator } from '@/hooks/useExpenseSplitter';
 import { useReadContract, useAccount } from 'wagmi';
 import { formatUnits, parseEther } from 'viem';
 import { getContractAddresses } from '@/contracts/config';
@@ -41,6 +41,8 @@ interface ExpenseData {
   receipt: string;
   notes: string;
   group?: string;
+  groupId?: string;
+  billIndex?: number;
   youWillReceive: number;
   youOwe: number;
   userAction: string;
@@ -129,12 +131,48 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
   // Get group info to get token address and bill creator
   const groupInfo = useGroupInfo(actualGroupId);
 
-  // Get the debt amount between current user and bill creator
+  // Get the actual group creator (admin)
+  const groupCreatorData = useGroupCreator(actualGroupId);
+
+  // Get the debt amount - check if current user owes bill creator
   const debtInfo = useDebtAmount(
     actualGroupId,
     currentUserAddress,
     billCreator.data as `0x${string}` | undefined
   );
+
+  // Also check if others owe current user (when current user is the bill creator)
+  const reverseDebtInfo = useDebtAmount(
+    actualGroupId,
+    billCreator.data as `0x${string}` | undefined,
+    currentUserAddress
+  );
+
+  // Check debt for each member to determine their payment status
+  const memberDebts = groupMembersData.members?.map((member) => {
+    if (!member) return null;
+    
+    const debtResult = useReadContract({
+      address: contracts.EXPENSE_SPLITTER,
+      abi: BillSplitterABI,
+      functionName: 'getDebt',
+      args: actualGroupId !== undefined && billCreator.data && member.address 
+        ? [actualGroupId, member.address as `0x${string}`, billCreator.data as `0x${string}`]
+        : undefined,
+      query: {
+        enabled: !!contracts.EXPENSE_SPLITTER && actualGroupId !== undefined && !!billCreator.data && !!member.address,
+        gcTime: 1000,
+        staleTime: 0,
+        refetchInterval: 3000, // Auto-refresh to detect payments
+      },
+    });
+    
+    return {
+      address: member.address as `0x${string}`,
+      debt: debtResult.data as bigint | undefined,
+      isLoading: debtResult.isLoading,
+    };
+  }).filter((debt): debt is { address: `0x${string}`; debt: bigint | undefined; isLoading: boolean } => debt !== null) || [];
 
   // Basic contract test - try to read member count for group 0
   const testMemberCount = useReadContract({
@@ -168,6 +206,31 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
     error: billCreator.error
   });
 
+  // DEBUG: Print raw contract data to console
+  console.log('=== RAW SMART CONTRACT DEBUG DATA ===');
+  console.log('Your wallet address:', currentUserAddress);
+  console.log('Group creator (admin) address:', groupCreatorData.groupCreator);
+  console.log('Bill creator address from contract:', billCreator.data);
+  console.log('Are you the group admin?:', groupCreatorData.groupCreator?.toLowerCase() === currentUserAddress?.toLowerCase());
+  console.log('Are you the bill creator?:', (billCreator.data as string)?.toLowerCase() === currentUserAddress?.toLowerCase());
+  console.log('Your debt to bill creator:', debtInfo.debtAmount?.toString(), 'wei');
+  console.log('Your debt formatted:', debtInfo.debtAmountFormatted, 'STK');
+  console.log('Bill creator owes you:', reverseDebtInfo.debtAmount?.toString(), 'wei');
+  console.log('Bill creator owes you formatted:', reverseDebtInfo.debtAmountFormatted, 'STK');
+  console.log('Group ID:', actualGroupId?.toString());
+  console.log('Bill Index:', actualBillIndex);
+
+  // Key payment status analysis
+  const youAreBillCreator = (billCreator.data as string | undefined)?.toLowerCase() === currentUserAddress?.toLowerCase();
+  const youHavePaid = debtInfo.debtAmount === BigInt(0);
+  const youWillReceive = youAreBillCreator && reverseDebtInfo.debtAmount > BigInt(0);
+
+  console.log('--- PAYMENT STATUS ANALYSIS ---');
+  console.log('You are the bill creator:', youAreBillCreator);
+  console.log('You have paid your debt:', youHavePaid);
+  console.log('You will receive payment:', youWillReceive);
+  console.log('=====================================');
+
   // Create contract-based expense data
   const contractExpenseData = useMemo(() => {
     console.log('contractExpenseData useMemo triggered with:');
@@ -193,19 +256,33 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
 
     // Find creator in group members
     const creatorAddress = billCreator.data as string;
-    const creator = groupMembersData.members.find(m => m.address.toLowerCase() === creatorAddress.toLowerCase());
+    const creator = groupMembersData.members.find(m => m && m.address.toLowerCase() === creatorAddress.toLowerCase());
 
-    // Create participants array
-    const participants = groupMembersData.members.map(member => ({
-      name: member.name || 'Member',
-      address: member.address,
-      amount: amountPerPerson,
-      status: 'approved',
-      isCreator: member.address.toLowerCase() === creatorAddress.toLowerCase(),
-      isCurrentUser: member.address.toLowerCase() === currentUserAddress?.toLowerCase(),
-      owesAmount: member.address.toLowerCase() === creatorAddress.toLowerCase() ? 0 : amountPerPerson,
-      willReceive: member.address.toLowerCase() === creatorAddress.toLowerCase() ? amountETH - amountPerPerson : 0
-    }));
+    // Create participants array - exclude the bill creator since they already paid
+    const participants = groupMembersData.members
+      .filter((member): member is NonNullable<typeof member> => member !== null && member.address.toLowerCase() !== creatorAddress.toLowerCase())
+      .map(member => {
+        // Find this member's debt information
+        const memberDebtInfo = memberDebts.find(
+          d => d.address.toLowerCase() === member.address.toLowerCase()
+        );
+        
+        // If debt is 0, they've paid. Otherwise, they still owe money.
+        const hasPaid = memberDebtInfo?.debt === BigInt(0);
+        const status = hasPaid ? 'paid' : 'approved';
+        
+        return {
+          name: member.name || 'Member',
+          address: member.address,
+          amount: amountPerPerson,
+          status: status,
+          isCreator: false,
+          isCurrentUser: member.address.toLowerCase() === currentUserAddress?.toLowerCase(),
+          owesAmount: amountPerPerson,
+          willReceive: 0,
+          debt: memberDebtInfo?.debt
+        };
+      });
 
     const isCurrentUserCreator = currentUserAddress?.toLowerCase() === creatorAddress.toLowerCase();
 
@@ -230,7 +307,8 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
       receipt: 'On-chain',
       notes: `Bill created on blockchain by ${creator?.name || 'Unknown'}`,
       group: `Group ${groupId}`,
-      youWillReceive: isCurrentUserCreator ? amountETH - amountPerPerson : 0,
+      // Fixed logic: if you created the bill, you'll receive back the total minus your own share
+      youWillReceive: isCurrentUserCreator ? (amountPerPerson * participants.length) : 0,
       youOwe: isCurrentUserCreator ? 0 : amountPerPerson,
       userAction: isCurrentUserCreator ? 'collect' : 'pay',
       items: [
@@ -240,7 +318,7 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
 
     console.log('contractExpenseData final result:', result);
     return result;
-  }, [billAmount.data, billDescription.data, billCreator.data, groupMembersData.members, participantCount.data, actualGroupId, actualBillIndex]);
+  }, [billAmount.data, billDescription.data, billCreator.data, groupMembersData.members, participantCount.data, actualGroupId, actualBillIndex, memberDebts, currentUserAddress]);
 
   // Payment function for settling debt
   const handlePayment = async () => {
@@ -282,35 +360,49 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
 
     setIsSettling(true);
     try {
-      const tokenAddress = groupInfo.groupInfo.token;
+      // Use the known STK token address instead of potentially corrupted contract data
+      const tokenAddress = contracts.TOKENS?.STK as `0x${string}`;
+      if (!tokenAddress) {
+        throw new Error('STK token address not found in config');
+      }
+
       const creditorAddress = billCreator.data as `0x${string}`;
       const debtAmount = debtInfo.debtAmount;
 
-      console.log('Starting payment process:', {
+      // Validate all required data
+      if (!creditorAddress || creditorAddress === '0x0000000000000000000000000000000000000000') {
+        throw new Error('Invalid creditor address');
+      }
+      if (!debtAmount || debtAmount === BigInt(0)) {
+        throw new Error('No debt amount to settle');
+      }
+
+      console.log('Starting payment process with verified data:', {
         tokenAddress,
         creditorAddress,
         debtAmount: debtAmount.toString(),
-        contractAddress: contracts.EXPENSE_SPLITTER
+        debtAmountFormatted: formatUnits(debtAmount, 18),
+        contractAddress: contracts.EXPENSE_SPLITTER,
+        currentUserAddress
       });
 
       // Step 1: Approve token spending
-      console.log('Step 1: Approving token spending...');
-      try {
-        await approveToken(tokenAddress, contracts.EXPENSE_SPLITTER!, debtAmount);
-        console.log('Token approval submitted successfully');
+      console.log(`Step 1: Approving ${formatUnits(debtAmount, 18)} STK tokens for contract ${contracts.EXPENSE_SPLITTER}...`);
+      await approveToken(tokenAddress, contracts.EXPENSE_SPLITTER!, debtAmount);
+      console.log('STK token approval transaction submitted successfully');
 
-        // Add a small delay to let user see the approval transaction
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      // Wait for approval to be confirmed before settling
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
-        // Step 2: Settle the debt
-        console.log('Step 2: Settling debt...');
-        await settleDebt(actualGroupId, creditorAddress, debtAmount);
-        console.log('Debt settlement submitted successfully');
+      // Step 2: Settle the debt
+      console.log(`Step 2: Settling ${formatUnits(debtAmount, 18)} STK tokens to creditor ${creditorAddress}...`);
+      await settleDebt(actualGroupId, creditorAddress, debtAmount);
+      console.log('STK debt settlement transaction submitted successfully');
 
-      } catch (approvalError) {
-        console.error('Approval failed:', approvalError);
-        throw approvalError;
-      }
+      // Auto-refresh after successful payment
+      setTimeout(() => {
+        window.location.reload();
+      }, 3000);
 
       console.log('Payment process completed successfully');
     } catch (error) {
@@ -371,9 +463,40 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
 
   console.log('ExpenseDetailsScreen - groupInfo:', groupInfo);
   console.log('ExpenseDetailsScreen - debtInfo:', debtInfo);
+  console.log('ExpenseDetailsScreen - reverseDebtInfo:', reverseDebtInfo);
   console.log('ExpenseDetailsScreen - currentUserAddress:', currentUserAddress);
+  console.log('ExpenseDetailsScreen - billCreator.data:', billCreator.data);
+  console.log('ExpenseDetailsScreen - isCurrentUserBillCreator:', currentUserAddress?.toLowerCase() === (billCreator.data as string)?.toLowerCase());
   console.log('ExpenseDetailsScreen - contractExpenseData:', contractExpenseData);
   console.log('ExpenseDetailsScreen - isLoadingContractData:', isLoadingContractData);
+
+  // Determine correct user action based on actual smart contract debt data
+  const getUserAction = () => {
+    if (!contractExpenseData) {
+      return expenseData.userAction || 'pay'; // Use passed data or default for demo mode
+    }
+
+    // Use actual debt data from smart contract
+    const youOweDebt = debtInfo.debtAmount > BigInt(0);
+    const othersOweYou = reverseDebtInfo.debtAmount > BigInt(0);
+    const youAreBillCreator = (billCreator.data as string | undefined)?.toLowerCase() === currentUserAddress?.toLowerCase();
+
+    console.log('getUserAction analysis:', {
+      youOweDebt,
+      othersOweYou,
+      youAreBillCreator,
+      debtAmount: debtInfo.debtAmount?.toString(),
+      reverseDebtAmount: reverseDebtInfo.debtAmount?.toString()
+    });
+
+    if (youOweDebt) {
+      return 'pay'; // You still owe money
+    } else if (othersOweYou || youAreBillCreator) {
+      return 'collect'; // Others owe you money or you're waiting to be paid
+    } else {
+      return 'paid'; // You've paid your share and nobody owes you
+    }
+  };
 
   // Enhanced expense data with additional details and safe defaults
   const detailedExpenseData = {
@@ -386,6 +509,7 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
     totalParticipants: expenseData.totalParticipants || 1,
     youWillReceive: expenseData.youWillReceive || 0,
     youOwe: expenseData.youOwe || 0,
+    userAction: getUserAction(), // Use smart contract-based logic
     items: expenseData.items || [
       { name: 'Americano x3', price: 15.00 },
       { name: 'Avocado Toast x2', price: 28.00 },
@@ -443,9 +567,17 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
             {detailedExpenseData.userAction === 'pay' && (
               <div className="text-right">
                 <div className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 rounded-xl font-bold text-lg mb-2">
-                  💳 You Owe: {contractExpenseData ? `${(detailedExpenseData.youOwe || 0).toFixed(4)} ETH` : `$${(detailedExpenseData.youOwe || 0).toFixed(2)}`}
+                  💳 You Owe: {contractExpenseData ? `${debtInfo.debtAmountFormatted} STK` : `$${(detailedExpenseData.youOwe || 0).toFixed(2)}`}
                 </div>
                 <p className="text-sm text-red-600 font-medium">You need to pay your share</p>
+              </div>
+            )}
+            {detailedExpenseData.userAction === 'paid' && (
+              <div className="text-right">
+                <div className="bg-gradient-to-r from-blue-500 to-blue-600 text-white px-4 py-2 rounded-xl font-bold text-lg mb-2">
+                  ✅ You Paid: {contractExpenseData ? `${debtInfo.debtAmountFormatted} STK` : `$${(detailedExpenseData.youOwe || 0).toFixed(2)}`}
+                </div>
+                <p className="text-sm text-blue-600 font-medium">Your payment has been settled</p>
               </div>
             )}
             <div className="flex items-center gap-2">
@@ -477,16 +609,22 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
                   <span className="text-3xl">💰</span>
                 </div>
                 <h2 className="text-3xl font-bold text-green-900 mb-2">
-                  You Will Receive ${(detailedExpenseData.youWillReceive || 0).toFixed(2)}
+                  You Will Receive {contractExpenseData ?
+                    `${(detailedExpenseData.youWillReceive || 0).toFixed(4)} ETH` :
+                    `$${(detailedExpenseData.youWillReceive || 0).toFixed(2)}`
+                  }
                 </h2>
-                <p className="text-green-700 text-lg mb-4">You paid the bill - others will reimburse you</p>
+                <p className="text-green-700 text-lg mb-4">You paid the bill - others will reimburse you automatically when they settle</p>
                 <div className="flex items-center justify-center gap-2 mb-6">
                   <CheckCircle className="w-5 h-5 text-green-600" />
-                  <span className="text-green-600 font-medium">All participants approved</span>
+                  <span className="text-green-600 font-medium">Waiting for participants to pay</span>
                 </div>
-                <Button className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-2xl font-bold text-lg">
-                  Collect Payment Now
-                </Button>
+                <div className="bg-green-100 rounded-xl p-4">
+                  <p className="text-green-800 text-sm">
+                    💡 <strong>No action needed!</strong> When participants click "Pay Your Share" below,
+                    tokens will be transferred directly to your wallet automatically.
+                  </p>
+                </div>
               </div>
             </div>
           ) : (
@@ -514,20 +652,23 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
                     console.log('Pay Your Share button clicked');
                     handlePayment();
                   }}
-                  disabled={isSettling || isConfirming || !contractExpenseData || debtInfo.debtAmount === BigInt(0)}
+                  disabled={isSettling || isConfirming || !contractExpenseData || debtInfo.debtAmount === BigInt(0) || (currentUserAddress?.toLowerCase() === (billCreator.data as string)?.toLowerCase())}
                 >
-                  {isSettling ? 'Approving & Settling...' :
-                   isConfirming ? 'Confirming Transaction...' :
-                   contractExpenseData ? 'Pay Your Share' : 'Demo Mode - No Payment'}
+                  {isSettling ? 'Step 1: Approving Tokens...' :
+                   isConfirming ? 'Step 2: Settling Debt...' :
+                   contractExpenseData ? `Pay ${debtInfo.debtAmountFormatted} STK` : 'Demo Mode - No Payment'}
                 </Button>
                 {contractExpenseData && debtInfo.debtAmount > BigInt(0) && (
                   <p className="text-xs text-gray-600 mt-2">
-                    This will approve and transfer {debtInfo.debtAmountFormatted} ETH tokens
+                    This will approve and transfer {debtInfo.debtAmountFormatted} STK tokens to {contractExpenseData.paidBy}
                   </p>
                 )}
                 {contractExpenseData && debtInfo.debtAmount === BigInt(0) && (
                   <p className="text-xs text-yellow-600 mt-2">
-                    No debt found - you may have already paid or are not part of this bill
+                    {currentUserAddress?.toLowerCase() === (billCreator.data as string)?.toLowerCase()
+                      ? "You created this bill - others owe you money"
+                      : "No debt found - you may have already paid or are not part of this bill"
+                    }
                   </p>
                 )}
                 {contractExpenseData && !currentUserAddress && (
@@ -774,9 +915,15 @@ export const ExpenseDetailsScreen: React.FC<ExpenseDetailsScreenProps> = ({ onBa
                         </div>
                         <p className="text-sm font-medium mt-2">
                           {detailedExpenseData.userAction === 'collect' ? (
-                            <span className="text-green-600">
-                              Will transfer {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`} to you
-                            </span>
+                            participant.status === 'paid' ? (
+                              <span className="text-blue-600">
+                                ✅ Paid {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`} - Settled
+                              </span>
+                            ) : (
+                              <span className="text-green-600">
+                                Will transfer {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`} to you
+                              </span>
+                            )
                           ) : participant.name.includes('You') ? (
                             <span className="text-red-600">
                               You need to pay {contractExpenseData ? `${(participant.amount || 0).toFixed(4)} ETH` : `$${(participant.amount || 0).toFixed(2)}`}

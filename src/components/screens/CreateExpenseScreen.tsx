@@ -80,6 +80,12 @@ export const CreateExpenseScreen: React.FC<CreateExpenseScreenProps> = ({ onBack
       });
 
       await addBill(groupIdBigInt, description, amountWei, selectedMembers as `0x${string}`[]);
+
+      // Auto-refresh after successful expense creation
+      setTimeout(() => {
+        window.location.reload(); // Simple solution to refresh data
+      }, 2000);
+
       onBack(); // Go back on success
     } catch (error) {
       console.error('Failed to create expense:', error);

@@ -3,18 +3,11 @@ import { motion } from 'framer-motion';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ProfilePicture } from '../ui/ProfilePicture';
-import { MoreVertical, ArrowRight, Plus, Camera, User } from 'lucide-react';
+import { MoreVertical, ArrowRight, Plus, Camera, User, DollarSign } from 'lucide-react';
 import { useAccount, useBalance, useChainId } from 'wagmi';
 import { formatEther } from 'viem';
-import { useExpenseSplitter, useUserExpenseDashboard } from '@/hooks/useExpenseSplitter';
+import { useExpenseSplitter, useUserExpenseDashboard, useSplitChainBalance, useGroupManagementData } from '@/hooks/useExpenseSplitter';
 import { getContractAddress, isChainSupported, getSupportedChainNames, getContractAddresses } from '@/contracts/config';
-
-// Extend window object for ethereum
-declare global {
-  interface Window {
-    ethereum?: any;
-  }
-}
 
 interface Participant {
   name: string;
@@ -170,6 +163,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
     chainId = undefined;
   }
 
+  // Get SplitChain token balance
+  const splitChainBalance = useSplitChainBalance(address);
+
   useEffect(() => {
     setMounted(true);
   }, []);
@@ -220,6 +216,50 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
 
   const expenseSplitter = useExpenseSplitter();
   const userDashboard = useUserExpenseDashboard(address as `0x${string}`, BigInt(1)); // Example group ID
+  
+  // Load bills from multiple groups for recent expenses dashboard
+  const { groups: allGroups, isLoading: groupsLoading } = useGroupManagementData();
+  
+  // Get recent bills across all groups (flattened)
+  const recentExpenses = React.useMemo(() => {
+    if (!allGroups || allGroups.length === 0) return [];
+    
+    // Collect all bills from all groups
+    const allBills: any[] = [];
+    
+    allGroups.forEach((group: any) => {
+      // For now, show groups as expense summary
+      if (group.members && group.members[0]) {
+        const balance = group.members[0].balance;
+        if (balance !== 0) {
+          allBills.push({
+            id: `group-${group.id}`,
+            groupId: group.id,
+            groupName: group.name,
+            description: group.description,
+            amount: Math.abs(balance),
+            type: balance > 0 ? 'receiving' : 'paying',
+            date: 'Recent',
+            memberCount: group.members.length,
+            groupData: group // Store the full group data for navigation
+          });
+        }
+      }
+    });
+    
+    return allBills.slice(0, 5); // Show max 5 recent items
+  }, [allGroups]);
+
+  // Quick Stats: Show summary from all groups with activity
+  const totalGroups = allGroups?.length || 0;
+  const totalOwedByOthers = allGroups?.reduce((sum: number, g: any) => {
+    const balance = g.members?.[0]?.balance || 0;
+    return sum + (balance > 0 ? balance : 0);
+  }, 0) || 0;
+  const totalOwed = allGroups?.reduce((sum: number, g: any) => {
+    const balance = g.members?.[0]?.balance || 0;
+    return sum + (balance < 0 ? Math.abs(balance) : 0);
+  }, 0) || 0;
 
   // Handle transaction success (following Agro's pattern)
   useEffect(() => {
@@ -299,6 +339,16 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
                             {parseFloat(formatEther(balance.value)).toFixed(4)} ETH
                           </p>
                         )}
+                        {mounted && splitChainBalance && !splitChainBalance.isLoading && (
+                          <p className="text-green-400 text-sm mt-2">
+                            {splitChainBalance.balanceFormatted} STK
+                          </p>
+                        )}
+                        {mounted && splitChainBalance?.isLoading && (
+                          <p className="text-gray-500 text-sm mt-2 animate-pulse">
+                            Loading STK...
+                          </p>
+                        )}
                       </div>
                       <ArrowRight className="w-6 h-6 text-gray-400" />
                     </div>
@@ -319,6 +369,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
                 </div>
               </div>
             </motion.div>
+
 
             {/* Quick Actions */}
             <motion.div
@@ -371,166 +422,120 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
               </div>
             </motion.div>
 
-            {/* Smart Contract Status */}
+            {/* Get STK Tokens */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.25 }}
             >
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-                <h3 className="text-base font-semibold text-gray-900 mb-3">Smart Contract</h3>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Status</span>
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${contractAddress ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                      <span className={`text-sm font-medium ${contractAddress ? 'text-green-600' : 'text-red-600'}`}>
-                        {contractAddress ? 'Available' : 'Not Available'}
-                      </span>
-                    </div>
-                  </div>
-                  {contractAddress && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">Address</span>
-                      <span className="text-xs font-mono text-gray-900">
-                        {contractAddress.slice(0, 6)}...{contractAddress.slice(-4)}
-                      </span>
-                    </div>
-                  )}
+                <h3 className="text-base font-semibold text-gray-900 mb-3">Get STK Tokens</h3>
+                
+                {/* Current STK Balance */}
+                <div className="mb-4 p-3 bg-green-50 rounded-lg border border-green-200">
+                  <p className="text-sm text-gray-600 mb-1">Your STK Balance</p>
+                  <p className="text-2xl font-bold text-green-900">
+                    {mounted && splitChainBalance && !splitChainBalance.isLoading 
+                      ? splitChainBalance.balanceFormatted 
+                      : '0.00'} STK
+                  </p>
+                </div>
+
+                {/* Network Status */}
+                <div className="space-y-2 mb-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-600">Network</span>
                     <span className="text-sm font-medium text-blue-600">{networkName}</span>
                   </div>
-                  {(!contractAddress || contractError) && chainId && (
-                    <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                      <p className="text-yellow-800 text-sm font-medium mb-2">
-                        {contractError || `Contract not available on ${networkName}`}
-                      </p>
-                      <p className="text-yellow-700 text-xs mb-2">
-                        Please switch to Arbitrum Sepolia to use the contract
-                      </p>
-                      <button
-                        onClick={async () => {
-                          if (window.ethereum) {
-                            try {
-                              await window.ethereum.request({
-                                method: 'wallet_switchEthereumChain',
-                                params: [{ chainId: '0x17EAE' }], // 421614 in hex for Arbitrum Sepolia
-                              });
-                            } catch (error: any) {
-                              // If the chain doesn't exist, add it
-                              if (error.code === 4902) {
-                                try {
-                                  await window.ethereum.request({
-                                    method: 'wallet_addEthereumChain',
-                                    params: [{
-                                      chainId: '0x17EAE',
-                                      chainName: 'Arbitrum Sepolia',
-                                      nativeCurrency: {
-                                        name: 'ETH',
-                                        symbol: 'ETH',
-                                        decimals: 18
-                                      },
-                                      rpcUrls: ['https://arb-sepolia.g.alchemy.com/v2/woz-6XsoF8SYpREpEiPG1'],
-                                      blockExplorerUrls: ['https://sepolia.arbiscan.io/']
-                                    }]
-                                  });
-                                } catch (addError) {
-                                  console.error('Error adding network:', addError);
-                                }
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Contract</span>
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${contractAddress ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                      <span className={`text-xs font-medium ${contractAddress ? 'text-green-600' : 'text-red-600'}`}>
+                        {contractAddress ? 'Ready' : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Switch Network Warning */}
+                {(!contractAddress || contractError) && chainId && (
+                  <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-3">
+                    <p className="text-yellow-800 text-xs font-medium mb-2">
+                      ⚠️ Please switch to Arbitrum Sepolia
+                    </p>
+                    <button
+                      onClick={async () => {
+                        if (window.ethereum && 'request' in window.ethereum) {
+                          try {
+                            await (window.ethereum.request as (args: { method: string; params?: unknown[] }) => Promise<unknown>)({
+                              method: 'wallet_switchEthereumChain',
+                              params: [{ chainId: '0x17EAE' }],
+                            });
+                          } catch (error: unknown) {
+                            const err = error as { code?: number };
+                            if (err.code === 4902) {
+                              try {
+                                await (window.ethereum.request as (args: { method: string; params?: unknown[] }) => Promise<unknown>)({
+                                  method: 'wallet_addEthereumChain',
+                                  params: [{
+                                    chainId: '0x17EAE',
+                                    chainName: 'Arbitrum Sepolia',
+                                    nativeCurrency: {
+                                      name: 'ETH',
+                                      symbol: 'ETH',
+                                      decimals: 18
+                                    },
+                                    rpcUrls: ['https://arb-sepolia.g.alchemy.com/v2/woz-6XsoF8SYpREpEiPG1'],
+                                    blockExplorerUrls: ['https://sepolia.arbiscan.io/']
+                                  }]
+                                });
+                              } catch (addError) {
+                                console.error('Error adding network:', addError);
                               }
                             }
                           }
-                        }}
-                        className="w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-                      >
-                        Switch to Arbitrum Sepolia
-                      </button>
-                    </div>
-                  )}
-                  {contractAddress && chainSupported && (
-                    <div className="space-y-2 mt-2">
-                      {/* Contract Status Info */}
-                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                        <p className="text-green-800 text-sm font-medium mb-2">
-                          ✅ Contract Activated
-                        </p>
-                        <p className="text-green-700 text-xs">
-                          Contract is now ready for testing. Check console for detailed error logs if issues occur.
-                        </p>
-                      </div>
+                        }
+                      }}
+                      className="w-full bg-yellow-600 hover:bg-yellow-700 text-white py-2 rounded-lg text-xs font-medium transition-colors"
+                    >
+                      Switch Network
+                    </button>
+                  </div>
+                )}
 
-                      {/* Test Read Function First */}
-                      <button
-                        onClick={async () => {
-                          try {
-                            console.log('Testing read function first...');
-                            const groupInfo = await fetch(`https://arb-sepolia.g.alchemy.com/v2/woz-6XsoF8SYpREpEiPG1`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                jsonrpc: '2.0',
-                                method: 'eth_call',
-                                params: [{
-                                  to: contractAddress,
-                                  data: '0x8da5cb5b' // Simple read call
-                                }, 'latest'],
-                                id: 1
-                              })
-                            });
-                            const result = await groupInfo.json();
-                            console.log('Contract read test result:', result);
-                          } catch (error) {
-                            console.error('Read test error:', error);
-                          }
-                        }}
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg text-sm font-medium transition-colors mb-2"
-                      >
-                        🔍 Test Read Function
-                      </button>
-
-                      {/* Test Contract Button */}
-                      <button
-                        onClick={async () => {
-                          try {
-                            // Create a simple test group with minimum 2 members
-                            const testAddress2 = '0x1234567890123456789012345678901234567890'; // Dummy second address
-
-                            // Use WETH token for test group
-                            const contracts = getContractAddresses();
-                            const tokenAddress = contracts.TOKENS?.WETH || '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73';
-
-                            console.log('Creating test group with WETH token:', tokenAddress);
-
-                            await expenseSplitter.createGroup(
-                              'Test Group (WETH)',
-                              tokenAddress, // Use WETH token address
-                              ['You', 'TestUser'],
-                              [address as `0x${string}`, testAddress2 as `0x${string}`]
-                            );
-                          } catch (error) {
-                            console.error('Error creating group:', error);
-                          }
-                        }}
-                        disabled={expenseSplitter.isPending || !address || !chainSupported}
-                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white py-2 rounded-lg text-sm font-medium transition-colors"
-                      >
-                        {expenseSplitter.isPending ? 'Creating...' : '🧪 Test Create Group'}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                {/* Faucet Button */}
+                {contractAddress && chainSupported && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500 mb-2">
+                      Get free STK tokens for testing. You'll receive 100 STK tokens.
+                    </p>
+                    <button
+                      onClick={async () => {
+                        // TODO: Implement faucet functionality
+                        // This will call the publicMint function on the STK token contract
+                        console.log('Faucet button clicked - mint STK tokens');
+                        alert('Faucet functionality coming soon!');
+                      }}
+                      disabled={!address || !chainSupported}
+                      className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 disabled:from-gray-400 disabled:to-gray-500 text-white py-3 rounded-lg text-sm font-bold transition-all transform hover:scale-105 disabled:hover:scale-100"
+                    >
+                      💰 Get Free STK Tokens
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
 
-            {/* Recent Activity */}
+            {/* Recent Expenses */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6, delay: 0.3 }}
             >
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-                <h3 className="text-base font-semibold text-gray-900 mb-3">Recent Activity</h3>
+                <h3 className="text-base font-semibold text-gray-900 mb-3">Recent Expenses</h3>
+
                 {expenseSplitter.hash && (
                   <div className="space-y-3">
                     <div className="flex items-center gap-3 p-2">
@@ -541,12 +546,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
                       }`}></div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900">
-                          {expenseSplitter.isSuccess ? 'Group Created' :
-                           expenseSplitter.isConfirming ? 'Creating Group...' :
-                           'Group Transaction Sent'}
+                          {expenseSplitter.isSuccess ? 'Transaction Complete' :
+                           expenseSplitter.isConfirming ? 'Processing...' :
+                           'Transaction Sent'}
                         </p>
-                        <p className="text-xs text-gray-500">
-                          Tx: {expenseSplitter.hash.slice(0, 10)}...{expenseSplitter.hash.slice(-8)}
+                        <p className="text-xs text-gray-500 truncate">
+                          {expenseSplitter.hash.slice(0, 10)}...{expenseSplitter.hash.slice(-8)}
                         </p>
                       </div>
                       <span className="text-xs text-blue-600">
@@ -559,11 +564,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
                   <div className="text-center py-6">
                     <div className="w-12 h-12 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-3">
                       <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                       </svg>
                     </div>
-                    <p className="text-sm text-gray-500">No recent activity</p>
-                    <p className="text-xs text-gray-400 mt-1">Create your first group to get started</p>
+                    <p className="text-sm text-gray-500">No expenses yet</p>
+                    <p className="text-xs text-gray-400 mt-1">Add your first expense</p>
                   </div>
                 )}
               </div>
@@ -572,89 +577,163 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onCreateExpense, onFrien
 
           {/* Main Content Area */}
           <div className="lg:col-span-3 space-y-8">
-            {/* My Groups & Balances */}
+            {/* Quick Stats Overview */}
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.05 }}
+            >
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                {/* Total Groups */}
+                <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl p-4 border border-purple-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="w-10 h-10 bg-purple-200 rounded-xl flex items-center justify-center">
+                      <User className="w-5 h-5 text-purple-700" />
+                    </div>
+                  </div>
+                  <p className="text-sm text-purple-600 font-medium mb-1">Total Groups</p>
+                  <p className="text-2xl font-bold text-purple-900">
+                    {groupsLoading ? '...' : totalGroups}
+                  </p>
+                </div>
+
+                {/* Amount You're Owed */}
+                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-2xl p-4 border border-green-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="w-10 h-10 bg-green-200 rounded-xl flex items-center justify-center">
+                      <span className="text-xl">💰</span>
+                    </div>
+                  </div>
+                  <p className="text-sm text-green-600 font-medium mb-1">You're Owed</p>
+                  <p className="text-2xl font-bold text-green-900">
+                    {groupsLoading ? '...' : totalOwedByOthers.toFixed(4)} STK
+                  </p>
+                </div>
+
+                {/* Amount You Owe */}
+                <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-2xl p-4 border border-orange-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="w-10 h-10 bg-orange-200 rounded-xl flex items-center justify-center">
+                      <span className="text-xl">💳</span>
+                    </div>
+                  </div>
+                  <p className="text-sm text-orange-600 font-medium mb-1">You Owe</p>
+                  <p className="text-2xl font-bold text-orange-900">
+                    {groupsLoading ? '...' : totalOwed.toFixed(4)} STK
+                  </p>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Recent Expenses */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.1 }}
             >
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900">My Groups & Balances</h2>
-                <Button variant="ghost" className="text-[#7C3AED] hover:text-[#6D28D9]" onClick={onFriends}>
-                  Manage Groups
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">Recent Activity</h2>
+                  <p className="text-sm text-gray-500 mt-1">Your latest expense activity across all groups</p>
+                </div>
+                <Button variant="ghost" className="text-[#7C3AED] hover:text-[#6D28D9]" onClick={onTransactions}>
+                  View All Transactions
                 </Button>
               </div>
 
-              <div className="grid gap-6">
-                {/* Example: Group 1 Balance */}
-                {userDashboard.memberBalance && !userDashboard.isLoading && (address && isConnected) ? (
-                  <div className="bg-gradient-to-br from-blue-100 to-purple-200 rounded-3xl p-6 hover:shadow-xl transition-all duration-300">
-                    <div className="mb-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-bold text-gray-900 text-xl">Group #1</h3>
-                        <span className="text-sm text-blue-600 bg-blue-100 px-2 py-1 rounded-full">Active</span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4 mb-4">
-                        <div>
-                          <p className="text-green-600 text-sm font-medium mb-1">💰 You Are Owed</p>
-                          <p className="font-bold text-gray-900 text-lg">{userDashboard.memberBalance.totalOwedByOthersFormatted} ETH</p>
+              <div className="space-y-4">
+                {/* Show recent expenses */}
+                {!groupsLoading && recentExpenses.length > 0 ? (
+                  recentExpenses.map((expense) => (
+                    <Card key={expense.id} className="p-5 hover:shadow-md transition-shadow cursor-pointer" onClick={() => onGroupDetails && onGroupDetails(expense.groupData)}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+                            expense.type === 'receiving' ? 'bg-green-100' : 'bg-orange-100'
+                          }`}>
+                            <span className="text-2xl">
+                              {expense.type === 'receiving' ? '💰' : '💳'}
+                            </span>
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-gray-900">{expense.groupName}</h3>
+                            <p className="text-sm text-gray-600 mt-1">{expense.description}</p>
+                            <p className="text-xs text-gray-400 mt-1">{expense.date}</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-red-600 text-sm font-medium mb-1">💳 You Owe</p>
-                          <p className="font-bold text-gray-900 text-lg">{userDashboard.memberBalance.totalOwedFormatted} ETH</p>
+                        <div className="text-right">
+                          <p className={`text-2xl font-bold ${
+                            expense.type === 'receiving' ? 'text-green-600' : 'text-orange-600'
+                          }`}>
+                            {expense.type === 'receiving' ? '+' : '-'}{expense.amount.toFixed(4)} STK
+                          </p>
+                          <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-medium ${
+                            expense.type === 'receiving' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                          }`}>
+                            {expense.type === 'receiving' ? 'You\'ll Receive' : 'You Owe'}
+                          </span>
                         </div>
                       </div>
-
-                      <div className="bg-white bg-opacity-50 rounded-lg p-3 mb-4">
-                        <p className="text-sm text-gray-600 mb-1">Net Balance</p>
-                        <p className={`font-bold text-lg ${
-                          parseFloat(userDashboard.memberBalance.netBalanceFormatted) > 0 ? 'text-green-600' :
-                          parseFloat(userDashboard.memberBalance.netBalanceFormatted) < 0 ? 'text-red-600' : 'text-gray-600'
-                        }`}>
-                          {parseFloat(userDashboard.memberBalance.netBalanceFormatted) > 0 ? '+' : ''}
-                          {userDashboard.memberBalance.netBalanceFormatted} ETH
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-2">
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-medium"
-                        onClick={() => onGroupDetails && onGroupDetails()}
-                      >
-                        View Details
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1 py-2 rounded-lg font-medium"
-                        onClick={onCreateExpense}
-                      >
-                        Add Expense
-                      </Button>
-                    </div>
+                    </Card>
+                  ))
+                ) : null}
+                
+                {/* Show "View All" link when expenses exist */}
+                {!groupsLoading && recentExpenses.length > 0 && (
+                  <div className="text-center py-4 border-t border-gray-100">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-purple-600 hover:text-purple-700 font-medium"
+                      onClick={onTransactions}
+                    >
+                      See All Transactions →
+                    </Button>
                   </div>
-                ) : (
-                  <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-3xl p-6">
+                )}
+
+                {/* Loading State */}
+                {groupsLoading && (
+                  <Card className="p-8">
                     <div className="text-center">
-                      <div className="w-16 h-16 mx-auto bg-gray-300 rounded-full flex items-center justify-center mb-4">
-                        <User className="w-8 h-8 text-gray-500" />
+                      <div className="w-16 h-16 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                        <DollarSign className="w-8 h-8 text-gray-400" />
                       </div>
-                      <h3 className="font-bold text-gray-900 text-xl mb-2">No Groups Yet</h3>
-                      <p className="text-gray-600 mb-4">Create or join a group to start splitting expenses</p>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        className="bg-purple-600 hover:bg-purple-700 text-white py-2 px-6 rounded-lg font-medium"
-                        onClick={onFriends}
-                      >
-                        Create Group
-                      </Button>
+                      <p className="text-gray-600">Loading expenses...</p>
                     </div>
-                  </div>
+                  </Card>
+                )}
+
+                {/* Empty State */}
+                {!groupsLoading && recentExpenses.length === 0 && (
+                  <Card className="p-8">
+                    <div className="text-center">
+                      <div className="w-16 h-16 mx-auto bg-gray-100 rounded-full flex items-center justify-center mb-4">
+                        <DollarSign className="w-8 h-8 text-gray-400" />
+                      </div>
+                      <h3 className="text-lg font-semibold text-gray-900 mb-2">No Recent Expenses</h3>
+                      <p className="text-sm text-gray-600 mb-4">
+                        Create a group and add your first expense to get started
+                      </p>
+                      <div className="flex gap-3 justify-center">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          className="bg-purple-600 hover:bg-purple-700 text-white"
+                          onClick={onCreateExpense}
+                        >
+                          Create Expense
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={onFriends}
+                        >
+                          Manage Groups
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
                 )}
               </div>
             </motion.div>

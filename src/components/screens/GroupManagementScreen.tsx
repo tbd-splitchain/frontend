@@ -5,7 +5,7 @@ import { Card } from '../ui/Card';
 import { ProfilePicture } from '../ui/ProfilePicture';
 import { ArrowLeft, Plus, Settings, Users, DollarSign, Calendar, MoreVertical, UserPlus, MessageCircle } from 'lucide-react';
 import { useAccount } from 'wagmi';
-import { useExpenseSplitter, useGroupInfo, useMemberBalance, useMemberCount, useGroupMembers, useGroupBills } from '@/hooks/useExpenseSplitter';
+import { useExpenseSplitter, useGroupManagementData, useGroupCreator } from '@/hooks/useExpenseSplitter';
 import { formatEther } from 'viem';
 import { toast } from 'react-hot-toast';
 import { getContractAddresses } from '@/contracts/config';
@@ -78,7 +78,7 @@ interface Member {
 export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ onBack, onGroupDetails }) => {
   const [activeTab, setActiveTab] = useState<'groups' | 'create'>('groups');
   const [groupName, setGroupName] = useState('');
-  const [selectedToken, setSelectedToken] = useState('WETH');
+  const [selectedToken, setSelectedToken] = useState('STK');
   const [members, setMembers] = useState<Member[]>([]);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberAddress, setNewMemberAddress] = useState('');
@@ -86,102 +86,8 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
   const { address, isConnected } = useAccount();
   const expenseSplitter = useExpenseSplitter();
 
-  // Expanded solution: Check more group IDs since your group might be at a higher ID
-  // Use our existing hooks to check groups 0-9
-  const group0 = useGroupInfo(BigInt(0));
-  const group1 = useGroupInfo(BigInt(1));
-  const group2 = useGroupInfo(BigInt(2));
-  const group3 = useGroupInfo(BigInt(3));
-  const group4 = useGroupInfo(BigInt(4));
-  const group5 = useGroupInfo(BigInt(5));
-  const group6 = useGroupInfo(BigInt(6));
-  const group7 = useGroupInfo(BigInt(7));
-  const group8 = useGroupInfo(BigInt(8));
-  const group9 = useGroupInfo(BigInt(9));
-
-  // Check membership in each group
-  const member0 = useMemberBalance(BigInt(0), address);
-  const member1 = useMemberBalance(BigInt(1), address);
-  const member2 = useMemberBalance(BigInt(2), address);
-  const member3 = useMemberBalance(BigInt(3), address);
-  const member4 = useMemberBalance(BigInt(4), address);
-  const member5 = useMemberBalance(BigInt(5), address);
-  const member6 = useMemberBalance(BigInt(6), address);
-  const member7 = useMemberBalance(BigInt(7), address);
-  const member8 = useMemberBalance(BigInt(8), address);
-  const member9 = useMemberBalance(BigInt(9), address);
-
-  // Get actual member counts using dedicated hook (more reliable than getGroupInfo)
-  const count0 = useMemberCount(BigInt(0));
-  const count1 = useMemberCount(BigInt(1));
-  const count2 = useMemberCount(BigInt(2));
-  const count3 = useMemberCount(BigInt(3));
-  const count4 = useMemberCount(BigInt(4));
-  const count5 = useMemberCount(BigInt(5));
-  const count6 = useMemberCount(BigInt(6));
-  const count7 = useMemberCount(BigInt(7));
-  const count8 = useMemberCount(BigInt(8));
-  const count9 = useMemberCount(BigInt(9));
-
-  // Helper function to create group object - use reliable member count
-  const createGroupObject = (groupData: any, membersData: any, memberCountData: any, id: string) => {
-    // Use the reliable getMemberCount instead of corrupted getGroupInfo.memberCount
-    const actualMemberCount = memberCountData?.memberCount ? Number(memberCountData.memberCount) : 0;
-    const hasValidMembers = actualMemberCount > 0;
-
-    if (!hasValidMembers) return null;
-
-    // Clean up corrupted names
-    let groupName = groupData?.name || `Group ${id}`;
-    if (groupName && (groupName.includes('\u0000') || groupName.includes('\u0002') || groupName.includes('\u0004'))) {
-      groupName = `Group ${id}`; // Use fallback name for corrupted data
-    }
-
-    return {
-      id,
-      name: groupName,
-      description: `Group with ${actualMemberCount} members (Bills: ${groupData?.billCount || 0})`,
-      totalExpenses: 0,
-      pendingAmount: 0,
-      monthlyTotal: 0,
-      members: [],
-      recentExpenses: []
-    };
-  };
-
-  // Filter groups where user is a member - use reliable member counts
-  const groups = [
-    createGroupObject(group0.groupInfo, member0, count0, '0'),
-    createGroupObject(group1.groupInfo, member1, count1, '1'),
-    createGroupObject(group2.groupInfo, member2, count2, '2'),
-    createGroupObject(group3.groupInfo, member3, count3, '3'),
-    createGroupObject(group4.groupInfo, member4, count4, '4'),
-    createGroupObject(group5.groupInfo, member5, count5, '5'),
-    createGroupObject(group6.groupInfo, member6, count6, '6'),
-    createGroupObject(group7.groupInfo, member7, count7, '7'),
-    createGroupObject(group8.groupInfo, member8, count8, '8'),
-    createGroupObject(group9.groupInfo, member9, count9, '9'),
-  ].filter(Boolean);
-
-  // Debug logging - show all groups to find your groups
-  console.log('Group data debug:', {
-    validGroups: groups.length,
-    group0: {
-      reliableMemberCount: count0.memberCount ? Number(count0.memberCount) : 0,
-      corruptedMemberCount: group0.groupInfo?.memberCount ? Number(group0.groupInfo.memberCount) : 0,
-      hasValidMembers: count0.memberCount ? Number(count0.memberCount) > 0 : false
-    },
-    group1: {
-      reliableMemberCount: count1.memberCount ? Number(count1.memberCount) : 0,
-      corruptedMemberCount: group1.groupInfo?.memberCount ? Number(group1.groupInfo.memberCount) : 0,
-      hasValidMembers: count1.memberCount ? Number(count1.memberCount) > 0 : false
-    },
-    foundGroups: groups.map(g => `${g?.name} (${g?.id})`),
-    memberCountErrors: {
-      count0Error: count0.error,
-      count1Error: count1.error
-    }
-  });
+  // Load real blockchain data
+  const { groups, isLoading: groupsLoading, error: groupsError } = useGroupManagementData();
   // Add a new member to the list
   const addMember = () => {
     if (!newMemberName.trim() || !newMemberAddress.trim()) {
@@ -217,8 +123,8 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
   };
 
   const handleCreateGroup = async () => {
-    if (!groupName.trim() || !address) {
-      toast.error('Please fill in group name and connect wallet');
+    if (!address) {
+      toast.error('Please connect wallet');
       return;
     }
 
@@ -228,41 +134,61 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
       return;
     }
 
-    // Prepare data for contract
+    // Prepare data for contract - use ID-based group naming
     const memberNames = ['You', ...members.map(member => member.name)];
     const memberAddresses = [address as `0x${string}`, ...members.map(member => member.address as `0x${string}`)];
 
-    console.log('Creating group with:', {
-      name: groupName,
+    // Auto-generate group name based on next available ID
+    const autoGroupName = `Group ${Math.max(...groups.map(g => parseInt(g.id)), -1) + 1}`;
+
+    console.log('Creating group with auto-generated name:', {
+      name: autoGroupName,
       memberNames,
       memberAddresses,
       totalMembers: memberNames.length
     });
 
     try {
-      // Use selected token address
+      // Use STK token address
       const contracts = getContractAddresses();
-      const tokenAddress = contracts.TOKENS?.[selectedToken as keyof typeof contracts.TOKENS] ||
-        contracts.TOKENS?.WETH ||
-        '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73'; // Fallback to WETH
+      console.log('Contract addresses:', contracts);
+      console.log('Available tokens:', contracts.TOKENS);
 
-      console.log('Creating group with selected token:', { selectedToken, tokenAddress });
+      const tokenAddress = contracts.TOKENS?.STK;
+      console.log('STK token address from config:', tokenAddress);
+
+      if (!tokenAddress) {
+        throw new Error(`STK token address not found in config. Available tokens: ${Object.keys(contracts.TOKENS || {})}`);
+      }
+
+      // Force the correct STK address as a safety check
+      const stkTokenAddress = '0x5423d4026EdeB17e30DF603Dc65Db7d8C5dC1c25' as `0x${string}`;
+
+      console.log('Creating group with STK token:', {
+        configAddress: tokenAddress,
+        forcedAddress: stkTokenAddress,
+        usingAddress: stkTokenAddress
+      });
 
       await expenseSplitter.createGroup(
-        groupName,
-        tokenAddress, // Use real WETH token address
+        autoGroupName, // Use auto-generated name instead of user input
+        stkTokenAddress, // Use forced STK token address
         memberNames,    // Actual member names
         memberAddresses // Corresponding addresses
       );
 
       // Reset form
       setGroupName('');
-      setSelectedToken('WETH');
       setMembers([]);
       toast.success('Group created successfully! It will appear in your groups list shortly.');
 
       // Switch to groups tab to see the new group
       setActiveTab('groups');
+
+      // Force refresh group data after successful creation
+      setTimeout(() => {
+        window.location.reload(); // Simple solution to refresh data
+      }, 2000);
     } catch (error) {
       console.error('Error creating group:', error);
       // Error toast is handled in the hook
@@ -362,7 +288,22 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
         >
           {activeTab === 'groups' && (
             <div className="space-y-6">
-              {groups.map((group, index) => (
+              {groupsLoading && (
+                <div className="text-center py-8">
+                  <div className="text-gray-600">Loading your groups...</div>
+                </div>
+              )}
+              {groupsError && (
+                <div className="text-center py-8">
+                  <div className="text-red-600">Error loading groups: {groupsError.message}</div>
+                </div>
+              )}
+              {!groupsLoading && !groupsError && groups.length === 0 && (
+                <div className="text-center py-8">
+                  <div className="text-gray-600">No groups found. Create your first group!</div>
+                </div>
+              )}
+              {!groupsLoading && !groupsError && groups.map((group, index) => (
                 <motion.div
                   key={group.id}
                   initial={{ opacity: 0, y: 20 }}
@@ -384,11 +325,11 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
                           <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                             <span className="flex items-center gap-1">
                               <Users className="w-4 h-4" />
-                              {group.members.length} members
+                              {group.description}
                             </span>
                             <span className="flex items-center gap-1">
                               <DollarSign className="w-4 h-4" />
-                              ${group.totalExpenses.toFixed(2)} total
+                              {group.totalExpenses.toFixed(4)} ETH total
                             </span>
                             <span className="flex items-center gap-1">
                               <Calendar className="w-4 h-4" />
@@ -494,38 +435,29 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
                   <div className="space-y-6">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Group Name
+                        Group Name (Auto-generated)
                       </label>
-                      <input
-                        type="text"
-                        value={groupName}
-                        onChange={(e) => setGroupName(e.target.value)}
-                        placeholder="e.g., SF Roommates, Work Lunch Crew"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent"
-                      />
+                      <div className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-gray-50 text-gray-600">
+                        Group {Math.max(...groups.map(g => parseInt(g.id)), -1) + 1}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Group names are automatically assigned based on creation order
+                      </p>
                     </div>
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Payment Token
                       </label>
-                      <select
-                        value={selectedToken}
-                        onChange={(e) => setSelectedToken(e.target.value)}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#7C3AED] focus:border-transparent bg-white"
-                      >
-                        <option value="WETH">WETH - Wrapped Ethereum</option>
-                        <option value="USDC">USDC - USD Coin</option>
-                        <option value="CUSTOM">CUSTOM - Your Custom Token</option>
-                      </select>
+                      <div className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-gray-50 text-gray-700">
+                        STK - SplitChain Token
+                      </div>
                       <p className="text-xs text-gray-500 mt-1">
-                        All expenses in this group will use {selectedToken} tokens. Members need to have {selectedToken} to participate.
+                        All expenses in this group will use STK tokens. Members need to have STK to participate.
                       </p>
-                      {selectedToken === 'CUSTOM' && (
-                        <p className="text-xs text-blue-600 mt-1 font-mono">
-                          Token Address: 0x0f764437ffBE1fcd0d0d276a164610422710B482
-                        </p>
-                      )}
+                      <p className="text-xs text-blue-600 mt-1 font-mono">
+                        Token Address: 0x5423d4026EdeB17e30DF603Dc65Db7d8C5dC1c25
+                      </p>
                     </div>
 
                     <div>
@@ -629,7 +561,7 @@ export const GroupManagementScreen: React.FC<GroupManagementScreenProps> = ({ on
                       <Button
                         variant="primary"
                         onClick={handleCreateGroup}
-                        disabled={expenseSplitter.isPending || !groupName.trim() || members.length === 0}
+                        disabled={expenseSplitter.isPending || members.length === 0}
                       >
                         {expenseSplitter.isPending ? 'Creating...' : `Create Group (${members.length + 1} members)`}
                       </Button>

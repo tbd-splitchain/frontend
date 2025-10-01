@@ -11,17 +11,13 @@ export const CONTRACT_ADDRESSES = {
 
 // Token addresses for different networks
 export const TOKEN_ADDRESSES = {
-  // Arbitrum Sepolia tokens
+  // Arbitrum Sepolia tokens - Only STK token
   421614: {
-    WETH: '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73', // WETH on Arbitrum Sepolia
-    USDC: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', // USDC on Arbitrum Sepolia
-    CUSTOM: '0x0f764437ffBE1fcd0d0d276a164610422710B482', // Custom ERC20 Token
+    STK: '0x5423d4026EdeB17e30DF603Dc65Db7d8C5dC1c25', // Your SplitChain (STK) token
   },
   // Arbitrum Mainnet tokens (for future)
   42161: {
-    WETH: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', // WETH on Arbitrum Mainnet
-    USDC: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', // USDC on Arbitrum Mainnet
-    CUSTOM: '0x0f764437ffBE1fcd0d0d276a164610422710B482', // Custom ERC20 Token (same on both networks)
+    STK: '0x5423d4026EdeB17e30DF603Dc65Db7d8C5dC1c25', // Your SplitChain (STK) token
   },
 } as const;
 

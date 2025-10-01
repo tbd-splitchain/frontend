@@ -378,40 +378,73 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
   const contractGroupData = useMemo(() => {
     console.log('contractGroupData useMemo - checking data:');
     console.log('  - groupInfo.groupInfo:', groupInfo.groupInfo);
+    console.log('  - groupInfo.isLoading:', groupInfo.isLoading);
+    console.log('  - groupInfo.error:', groupInfo.error);
     console.log('  - groupMembersData.members:', groupMembersData.members);
+    console.log('  - groupMembersData.members.length:', groupMembersData.members?.length);
     console.log('  - groupMembersData.isLoading:', groupMembersData.isLoading);
+    console.log('  - groupMembersData.error:', groupMembersData.error);
     console.log('  - groupBillsData.bills:', groupBillsData.bills);
+    console.log('  - groupBillsData.bills.length:', groupBillsData.bills?.length);
     console.log('  - groupBillsData.isLoading:', groupBillsData.isLoading);
     console.log('  - groupBillsData.error:', groupBillsData.error);
     console.log('  - passedGroupData:', passedGroupData);
 
-    if (!groupInfo.groupInfo || !groupMembersData.members || !groupBillsData.bills || !passedGroupData) {
+    // Log the token address for this group
+    if (groupInfo.groupInfo?.token) {
+      console.log(`🪙 Group ${groupId} Token Address:`, groupInfo.groupInfo.token);
+      console.log(`🎯 Expected STK Token:`, '0x5423d4026EdeB17e30DF603Dc65Db7d8C5dC1c25');
+      console.log(`✅ Addresses Match:`, groupInfo.groupInfo.token.toLowerCase() === '0x5423d4026EdeB17e30DF603Dc65Db7d8C5dC1c25'.toLowerCase());
+    } else {
+      console.log('❌ No token address found for this group');
+    }
+
+    // Check if we have the basic group info and the data arrays exist (even if empty)
+    if (!groupInfo.groupInfo || !passedGroupData || groupMembersData.members === undefined || groupBillsData.bills === undefined) {
       console.log('contractGroupData: Missing required data, returning null');
+      console.log('  - groupInfo.groupInfo:', !!groupInfo.groupInfo);
+      console.log('  - passedGroupData:', !!passedGroupData);
+      console.log('  - groupMembersData.members defined:', groupMembersData.members !== undefined);
+      console.log('  - groupBillsData.bills defined:', groupBillsData.bills !== undefined);
       return null;
     }
 
     // Transform members data
-    const transformedMembers = groupMembersData.members.map((member, index) => ({
-      id: index.toString(),
-      name: member.name || `Member ${index + 1}`,
-      username: member.address,
-      balance: parseFloat(formatUnits(member.netBalance, 18)),
-      status: 'active',
-      role: index === 0 ? 'admin' : 'member'
-    }));
+    const transformedMembers = groupMembersData.members
+      .filter((member): member is NonNullable<typeof member> => member !== null)
+      .map((member, index) => ({
+        id: index.toString(),
+        name: member.name || `Member ${index + 1}`,
+        username: member.address,
+        balance: parseFloat(formatUnits(member.netBalance, 18)),
+        status: 'active',
+        role: index === 0 ? 'admin' : 'member'
+      }));
 
     // Transform bills data
     const transformedExpenses = groupBillsData.bills.map((bill, index) => {
       const billAmountETH = bill.amount ? parseFloat(formatUnits(bill.amount, 18)) : 0;
-      const amountPerPerson = transformedMembers.length > 0 ? billAmountETH / transformedMembers.length : 0;
+
+      // Get actual participants for this bill from the contract
+      const participantCount = bill.participantCount ? Number(bill.participantCount) : 0;
+      const amountPerPerson = participantCount > 0 ? billAmountETH / participantCount : 0;
 
       console.log(`Bill ${index}:`, {
         description: bill.description,
         amountWei: bill.amount,
         amountETH: billAmountETH,
-        memberCount: transformedMembers.length,
+        actualParticipantCount: participantCount,
+        totalGroupMembers: transformedMembers.length,
         amountPerPerson: amountPerPerson
       });
+
+      // Create participants list - for now showing participant count
+      // TODO: We need to add a hook to fetch individual participant addresses for each bill
+      const participants = Array.from({ length: participantCount }, (_, i) => ({
+        name: `Participant ${i + 1}`, // Will be replaced with actual names when we add the hook
+        amount: amountPerPerson,
+        status: 'approved'
+      }));
 
       return {
         id: `bill-${index}`,
@@ -424,14 +457,10 @@ export const GroupDetailsScreen: React.FC<GroupDetailsScreenProps> = ({ onBack, 
         merchant: 'Contract',
         location: 'Blockchain',
         paidBy: bill.creator || 'Unknown',
-        participants: transformedMembers.map(member => ({
-          name: member.name,
-          amount: amountPerPerson,
-          status: 'approved'
-        })),
+        participants: participants,
         status: 'pending', // Bills don't have settled status in the current structure
-        approvals: transformedMembers.length,
-        totalParticipants: transformedMembers.length,
+        approvals: participantCount,
+        totalParticipants: participantCount,
         isReady: true,
         txHash: null,
         category: 'General',

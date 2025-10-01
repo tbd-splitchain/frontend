@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ArrowLeft, Filter, Download, ExternalLink, CheckCircle, Clock, XCircle } from 'lucide-react';
+import { useAccount } from 'wagmi';
+import { useGroupManagementData, useGroupInfo } from '@/hooks/useExpenseSplitter';
+import { formatEther } from 'viem';
 
 interface Transaction {
   id: string;
@@ -63,8 +66,46 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
   const [filter, setFilter] = useState<'all' | 'sent' | 'received' | 'pending'>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [displayCount, setDisplayCount] = useState(5);
+  
+  const { address } = useAccount();
+  const { groups: allGroups, isLoading: groupsLoading } = useGroupManagementData();
 
-  const transactions: Transaction[] = [
+  // Build transactions from real group/bill data
+  const transactions: Transaction[] = useMemo(() => {
+    if (!allGroups || allGroups.length === 0) return [];
+    
+    const allTransactions: Transaction[] = [];
+    
+    allGroups.forEach((group: any) => {
+      if (group.members && group.members[0]) {
+        const balance = group.members[0].balance;
+        const isCreator = group.members[0].role === 'admin';
+        
+        // Add transaction for this group's balance
+        if (balance !== 0) {
+          const isReceiving = balance > 0;
+          allTransactions.push({
+            id: `group-${group.id}-balance`,
+            type: isReceiving ? 'settlement' : 'payment',
+            amount: Math.abs(balance),
+            from: isReceiving ? 'Group Members' : 'You',
+            to: isReceiving ? 'You' : 'Group',
+            description: `${group.name} - ${group.description || 'Balance'}`,
+            timestamp: 'Recent',
+            status: 'pending',
+            txHash: null,
+            group: group.name,
+            participants: group.members.length,
+            yourShare: Math.abs(balance)
+          });
+        }
+      }
+    });
+    
+    return allTransactions;
+  }, [allGroups]);
+
+  const dummyTransactions: Transaction[] = [
     {
       id: 'bill-150',
       type: 'settlement',
@@ -179,7 +220,7 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
   };
 
 
-  const filteredTransactions = transactions.filter(tx => {
+  const filteredTransactions = (groupsLoading ? [] : transactions).filter(tx => {
     if (filter === 'all') return true;
     if (filter === 'pending') return tx.status === 'pending';
     if (filter === 'received') return (tx.type === 'settlement' && tx.to === 'You');
@@ -286,7 +327,18 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
           </motion.div>
         )}
 
+        {/* Loading State */}
+        {groupsLoading && (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 mx-auto bg-gray-200 rounded-full flex items-center justify-center mb-4 animate-pulse">
+              <Clock className="w-8 h-8 text-gray-400" />
+            </div>
+            <p className="text-gray-600">Loading transactions...</p>
+          </div>
+        )}
+
         {/* Summary Cards */}
+        {!groupsLoading && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -339,8 +391,10 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
             </Card>
           </motion.div>
         </div>
+        )}
 
         {/* Filter Tabs */}
+        {!groupsLoading && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -368,8 +422,10 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
             ))}
           </div>
         </motion.div>
+        )}
 
         {/* Transaction List */}
+        {!groupsLoading && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -672,9 +728,10 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
             </motion.div>
           ))}
         </motion.div>
+        )}
 
         {/* Load More */}
-        {displayCount < filteredTransactions.length && (
+        {!groupsLoading && displayCount < filteredTransactions.length && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -687,7 +744,7 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
           </motion.div>
         )}
 
-        {filteredTransactions.length === 0 && (
+        {!groupsLoading && filteredTransactions.length === 0 && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -699,7 +756,11 @@ export const TransactionHistoryScreen: React.FC<TransactionHistoryScreenProps> =
                 <Clock className="w-8 h-8 text-gray-400" />
               </div>
               <h3 className="text-lg font-semibold text-gray-900 mb-2">No transactions found</h3>
-              <p className="text-gray-500">No transactions match your current filter selection.</p>
+              <p className="text-gray-500">
+                {filter === 'all' 
+                  ? 'You have no transactions yet. Create a group and add expenses to get started!' 
+                  : 'No transactions match your current filter selection.'}
+              </p>
             </Card>
           </motion.div>
         )}
